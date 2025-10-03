@@ -3,7 +3,8 @@ const express = require('express');
 const cors = require('cors'); 
 const pool = require('./db'); // Importamos la conexión
 const authRoutes = require('./routes/authRoutes'); // Importamos rutas de Autenticación
-const gameRoutes = require('./routes/gameRoutes'); // Importamos rutas del Juego
+// Importamos el objeto completo {authenticateToken, router} y lo llamamos 'gameExports'
+const gameExports = require('./routes/gameRoutes'); 
 
 const app = express();
 app.use(express.json());
@@ -17,8 +18,9 @@ pool.connect()
   .catch(err => console.error('❌ Error de conexión a la base de datos:', err.message));
 
 
-// Middleware de autenticación (definido en gameRoutes para reusar constantes)
-const { authenticateToken } = require('./routes/gameRoutes');
+// Extraemos las propiedades que necesitamos del objeto importado:
+const authenticateToken = gameExports.authenticateToken;
+const gameRouter = gameExports.router; // <-- ¡Renombramos y usamos la propiedad 'router'!
 
 
 // -----------------------------------------------------------------
@@ -35,8 +37,7 @@ app.use('/api', authRoutes);
 
 // Rutas del Juego (Build, Generate-Resources)
 // Usamos el middleware de autenticación aquí para proteger todas las rutas de juego
-app.use('/api', authenticateToken, gameRoutes);
-
+app.use('/api', authenticateToken, gameRouter); // Ahora pasamos el objeto router correcto
 
 app.listen(port, () => {
   console.log(`Servidor escuchando en el puerto ${port}`);
