@@ -42,8 +42,16 @@ const authenticateToken = (req, res, next) => {
 };
 
 // -----------------------------------------------------------------
-// ⭐️ NUEVO: CONFIGURACIÓN DE PRODUCCIÓN Y COSTES
+// ⭐️ NUEVO: CONFIGURACIÓN DE PRODUCCIÓN Y COSTES Y POBLACION
 // -----------------------------------------------------------------
+
+
+// Lógica de Población
+const BASE_POPULATION = 10;
+const POPULATION_PER_HOUSE = 5;
+// Cantidad de comida consumida por 1 ciudadano por intervalo de 10s
+const FOOD_CONSUMPTION_PER_CITIZEN = 1
+
 
 // Tasa de producción por edificio (por intervalo de 10 segundos)
 const PRODUCTION_RATES = {
@@ -59,7 +67,27 @@ const BUILDING_COSTS = {
     'quarry': { wood: 40, stone: 80, food: 15 } // Nuevo coste de la Cantera
 };
 
-// Función auxiliar para calcular la producción total
+// Función auxiliar para calcular las estadísticas de población
+const calculatePopulationStats = (userBuildings) => {
+    let maxPopulation = BASE_POPULATION; // Población base
+    let currentHouses = 0;
+    
+    userBuildings.forEach(building => {
+        if (building.type === 'house') {
+            currentHouses = building.count;
+            maxPopulation += building.count * POPULATION_PER_HOUSE;
+        }
+    });
+ 
+    // Simplificación: Asumimos que la población actual siempre es la máxima que podemos mantener.
+    // En una lógica más compleja, la población actual crecería lentamente hasta maxPopulation.
+    return {
+        max_population: maxPopulation,
+        current_population: maxPopulation 
+    };
+ };
+
+// Función auxiliar para calcular la producción total, incluyendo el consumo de la población
 const calculateProduction = (userBuildings) => {
     let production = { wood: 0, stone: 0, food: 0 };
     
@@ -67,7 +95,7 @@ const calculateProduction = (userBuildings) => {
     if (!Array.isArray(userBuildings)) {
         return production;
     }
-
+   // 1. Calcular producción/consumo fijo de edificios (Sawmill, Quarry)
     userBuildings.forEach(building => {
         const rate = PRODUCTION_RATES[building.type];
         if (rate && building.count > 0) {
@@ -76,6 +104,13 @@ const calculateProduction = (userBuildings) => {
             production.food += (rate.food || 0) * building.count;
         }
     });
+
+ // 2. Calcular Consumo de Comida basado en la Población
+    // La población actual consume comida.
+    const foodConsumption = populationStats.current_population * -FOOD_CONSUMPTION_PER_CITIZEN;
+    production.food += foodConsumption;
+    
+
     return production;
 };
 
@@ -179,11 +214,15 @@ app.get('/api/me', authenticateToken, async (req, res) => {
             count: parseInt(row.count, 10)
         }));
 
+     // Calcular estadísticas de población
+    const populationStats = calculatePopulationStats(buildingsList);    
+
     // Devuelve los datos del usuario y sus edificios
     res.status(200).json({
      message: `Sesión reanudada para ${user.username}.`,
       user: user,
-            buildings: buildingsList
+      buildings: buildingsList,
+      population: populationStats
     });
 
   } catch (err) {
@@ -257,11 +296,13 @@ app.post('/api/build', authenticateToken, async (req, res) => {
       count: parseInt(row.count, 10)
     }));
 
+    const populationStats = calculatePopulationStats(buildingsList);
 
     res.status(200).json({
       message: `¡Construido con éxito! Has añadido 1 ${buildingType}.`,
       user: updatedUser,
-      buildings: buildingsList // <-- Enviamos la lista de edificios
+      buildings: buildingsList,
+      population: populationStats  // <-- Enviamos la lista de edificios
     });
 
   } catch (err) {
@@ -294,10 +335,15 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
             count: parseInt(row.count, 10)
         }));
         
-        // 2. Calcular la producción total
-        const production = calculateProduction(buildingsList);
+
+
+        // 2. Calcular la poblacion total
+        const populationStats = calculatePopulationStats(buildingsList); 
+
+        // 3. Calcular la producción total (incluyendo consumo de población)
+        const production = calculateProduction(buildingsList,populationStats);
         
-        // 3. Obtener los recursos actuales del usuario (y bloquear la fila)
+        // 4. Obtener los recursos actuales del usuario (y bloquear la fila)
         const currentResources = await client.query(
       'SELECT wood, stone, food FROM users WHERE id = $1 FOR UPDATE', 
       [userId]
@@ -310,13 +356,13 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
         
         const user = currentResources.rows[0];
 
-        // 4. Aplicar producción y asegurar que la comida no sea negativa
+        // 5. Aplicar producción y asegurar que la comida no sea negativa
         const newWood = user.wood + production.wood;
         const newStone = user.stone + production.stone;
         // La comida puede ser consumida (producción negativa), por eso Math.max(0, ...)
         const newFood = Math.max(0, user.food + production.food); 
 
-        // 5. Actualizar la base de datos
+        // 6. Actualizar la base de datos
         const updatedResources = await client.query(
             `UPDATE users SET
                 wood = $1,
@@ -331,11 +377,12 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
 
         const updatedUser = updatedResources.rows[0];
 
-        // 6. Responder al cliente
+        // 7. Responder al cliente
         res.status(200).json({
             message: `Generación: Madera: ${production.wood >= 0 ? '+' : ''}${production.wood}, Piedra: ${production.stone >= 0 ? '+' : ''}${production.stone}, Comida: ${production.food >= 0 ? '+' : ''}${production.food}`,
             user: updatedUser,
-            buildings: buildingsList
+            buildings: buildingsList,
+            population: populationStats
         });
 
 
