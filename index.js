@@ -48,13 +48,15 @@ const authenticateToken = (req, res, next) => {
 // Tasa de producción por edificio (por intervalo de 10 segundos)
 const PRODUCTION_RATES = {
     'house': { food: 1, wood: 0, stone: 0 }, 
-    'sawmill': { wood: 5, stone: 0, food: -1 } // Produce madera, consume comida
+    'sawmill': { wood: 5, stone: 0, food: -1 },
+    'quarry':{stone:8, wood:0, food:-2}, 
 };
 
 // Definir costes de construcción
 const BUILDING_COSTS = {
     'house': { wood: 20, stone: 10, food: 5 },
-    'sawmill': { wood: 50, stone: 30, food: 10 } // Nuevo coste del Aserradero
+    'sawmill': { wood: 50, stone: 30, food: 10 }, // Nuevo coste del Aserradero
+    'quarry': { wood: 40, stone: 80, food: 15 } // Nuevo coste de la Cantera
 };
 
 // Función auxiliar para calcular la producción total
@@ -256,18 +258,18 @@ app.post('/api/build', authenticateToken, async (req, res) => {
     }));
 
 
-        res.status(200).json({
-            message: `¡Construido con éxito! Has añadido 1 ${buildingType}.`,
-            user: updatedUser,
-            buildings: buildingsList // <-- Enviamos la lista de edificios
-        });
+    res.status(200).json({
+      message: `¡Construido con éxito! Has añadido 1 ${buildingType}.`,
+      user: updatedUser,
+      buildings: buildingsList // <-- Enviamos la lista de edificios
+    });
 
-    } catch (err) {
-        await client.query('ROLLBACK'); // Deshacer si hay error
-        res.status(500).json({ message: 'Error en la construcción.', error: err.message });
-    } finally {
-        client.release();
-    }
+  } catch (err) {
+    await client.query('ROLLBACK'); // Deshacer si hay error
+   res.status(500).json({ message: 'Error en la construcción.', error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
 
