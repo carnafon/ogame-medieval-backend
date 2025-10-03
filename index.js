@@ -58,13 +58,15 @@ const PRODUCTION_RATES = {
     'house': { food: 1, wood: 0, stone: 0 }, 
     'sawmill': { wood: 5, stone: 0, food: -1 },
     'quarry':{stone:8, wood:0, food:-2}, 
+    'farm': { food: 10, wood: -1, stone: 0 } // Ejemplo de granja que produce comida
 };
 
 // Definir costes de construcción
 const BUILDING_COSTS = {
     'house': { wood: 20, stone: 10, food: 5 },
     'sawmill': { wood: 50, stone: 30, food: 10 }, // Nuevo coste del Aserradero
-    'quarry': { wood: 40, stone: 80, food: 15 } // Nuevo coste de la Cantera
+    'quarry': { wood: 40, stone: 80, food: 15 }, // Nuevo coste de la Cantera
+    'farm': { wood: 40, stone: 10, food: 10 } // Nuevo coste de la Granja
 };
 
 // Función auxiliar para calcular las estadísticas de población
@@ -88,7 +90,7 @@ const calculatePopulationStats = (userBuildings) => {
  };
 
 // Función auxiliar para calcular la producción total, incluyendo el consumo de la población
-const calculateProduction = (userBuildings) => {
+const calculateProduction = (userBuildings,populationStats) => {
     let production = { wood: 0, stone: 0, food: 0 };
     
     // userBuildings debe ser un array (ej: [{type: 'house', count: 2}])
@@ -256,7 +258,12 @@ app.post('/api/build', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Usuario no encontrado.' });
     }
 
-    const user = currentResources.rows[0];
+    let user = currentResources.rows[0];
+
+    // ⭐️ FIX: Asegurar que los recursos sean números enteros antes de la resta para evitar errores de tipo.
+        let currentWood = parseInt(user.wood, 10);
+        let currentStone = parseInt(user.stone, 10);
+        let currentFood = parseInt(user.food, 10);
 
     // 3. Verificar si hay suficientes recursos
     if (user.wood < cost.wood || user.stone < cost.stone || user.food < cost.food) {
@@ -356,11 +363,16 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
         
         const user = currentResources.rows[0];
 
+        // ⭐️ FIX: Asegurar que los recursos sean números enteros antes del cálculo
+        const currentWood = parseInt(user.wood, 10);
+        const currentStone = parseInt(user.stone, 10);
+        const currentFood = parseInt(user.food, 10);
+
         // 5. Aplicar producción y asegurar que la comida no sea negativa
-        const newWood = user.wood + production.wood;
-        const newStone = user.stone + production.stone;
+        const newWood = currentWood + production.wood;
+        const newStone = currentStone + production.stone;
         // La comida puede ser consumida (producción negativa), por eso Math.max(0, ...)
-        const newFood = Math.max(0, user.food + production.food); 
+        const newFood = Math.max(0, currentFood + production.food); 
 
         // 6. Actualizar la base de datos
         const updatedResources = await client.query(
