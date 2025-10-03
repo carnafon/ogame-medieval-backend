@@ -66,7 +66,7 @@ const BUILDING_COSTS = {
     'house': { wood: 20, stone: 10, food: 5 },
     'sawmill': { wood: 50, stone: 30, food: 10 }, // Nuevo coste del Aserradero
     'quarry': { wood: 40, stone: 80, food: 15 }, // Nuevo coste de la Cantera
-    'farm': { wood: 40, stone: 10, food: 10 } // Nuevo coste de la Granja
+    'farm': { wood: 40, stone: 10, food: 0 } // Nuevo coste de la Granja
 };
 
 // Función auxiliar para calcular las estadísticas de población
