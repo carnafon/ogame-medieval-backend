@@ -44,6 +44,15 @@ const authenticateToken = (req, res, next) => {
         next();
     });
 };
+//DEFINIR COSTES DE CONSTRUCCIÓN
+const BUILDING_COSTS = {
+    'house': { wood: 20, stone: 10, food: 5 },
+    // Aquí puedes añadir más edificios, ej: 'mine': { wood: 50, stone: 50, food: 10 }
+};
+
+
+
+
 // --- RUTAS DE AUTENTICACIÓN (Registro, Login) ---
 // Comprueba la conexión a la base de datos
 pool.connect()
@@ -146,6 +155,90 @@ app.get('/api/me', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'Error al reanudar la sesión.', error: err.message });
     }
 });
+
+//RUTA CONSTRUCCION
+
+app.post('/api/build', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const { buildingType } = req.body; // Espera un 'buildingType': 'house', 'mine', etc.
+
+    // 1. Verificar si el tipo de edificio es válido
+    const cost = BUILDING_COSTS[buildingType];
+    if (!cost) {
+        return res.status(400).json({ message: 'Tipo de edificio no válido.' });
+    }
+
+    const client = await pool.connect(); // Usar pool para transacciones
+
+    try {
+        await client.query('BEGIN'); // Iniciar la transacción
+
+        // 2. Obtener los recursos actuales del usuario
+        const currentResources = await client.query(
+            'SELECT wood, stone, food FROM users WHERE id = $1 FOR UPDATE', // Bloquear fila
+            [userId]
+        );
+
+        if (currentResources.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Usuario no encontrado.' });
+        }
+
+        const user = currentResources.rows[0];
+
+        // 3. Verificar si hay suficientes recursos
+        if (user.wood < cost.wood || user.stone < cost.stone || user.food < cost.food) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
+        }
+
+        // 4. Deducir los recursos
+        const updatedResources = await client.query(
+            `UPDATE users SET
+                wood = wood - $1,
+                stone = stone - $2,
+                food = food - $3
+             WHERE id = $4
+             RETURNING wood, stone, food, username`,
+            [cost.wood, cost.stone, cost.food, userId]
+        );
+
+        const updatedUser = updatedResources.rows[0];
+
+        // 5. Registrar el nuevo edificio
+        await client.query(
+            'INSERT INTO buildings (user_id, type) VALUES ($1, $2)',
+            [userId, buildingType]
+        );
+
+        await client.query('COMMIT'); // Confirmar la transacción
+
+        // 6. Obtener la lista de edificios (opcional, pero útil para el frontend)
+        const buildingCountResult = await client.query(
+            'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type',
+            [userId]
+        );
+
+        const buildingsList = buildingCountResult.rows.map(row => ({
+            type: row.type,
+            count: parseInt(row.count, 10)
+        }));
+
+
+        res.status(200).json({
+            message: `¡Construido con éxito! Has añadido 1 ${buildingType}.`,
+            user: updatedUser,
+            buildings: buildingsList // <-- Enviamos la lista de edificios
+        });
+
+    } catch (err) {
+        await client.query('ROLLBACK'); // Deshacer si hay error
+        res.status(500).json({ message: 'Error en la construcción.', error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
 
 ////////////////////////////LOGICA DE RECURSOS PASIVOS////////////////////////////
 
