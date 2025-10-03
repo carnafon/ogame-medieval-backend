@@ -47,6 +47,42 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+
+  try {
+    // 1. Buscar el usuario por nombre de usuario
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
+    );
+
+    const user = userResult.rows[0];
+
+    // 2. Verificar si el usuario existe
+    if (!user) {
+      return res.status(401).json({ message: 'Usuario o contraseña incorrectos.' });
+    }
+
+    // 3. Verificar la contraseña (¡ADVERTENCIA: Aún no es segura!)
+    // NOTA: Estamos comparando texto plano. En un proyecto real, usarías una librería
+    // como bcrypt para verificar la contraseña hasheada: await bcrypt.compare(password, user.password)
+    if (user.password !== password) {
+      return res.status(401).json({ message: 'Usuario o contraseña incorrectos.' });
+    }
+
+    // 4. Login exitoso: devolver los datos del usuario y recursos
+    res.status(200).json({
+      message: `¡Bienvenido de nuevo, ${user.username}!`,
+      user: user
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: 'Error al iniciar sesión.', error: err.message });
+  }
+});
+
+
 // Lógica de generación pasiva de recursos (se ejecuta cada minuto)
 setInterval(async () => {
   try {
