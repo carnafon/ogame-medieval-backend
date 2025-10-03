@@ -3,8 +3,10 @@ const express = require('express');
 const cors = require('cors'); 
 const pool = require('./db'); // Importamos la conexión
 const authRoutes = require('./routes/authRoutes'); // Importamos rutas de Autenticación
-// Importamos el objeto completo {authenticateToken, router} y lo llamamos 'gameExports'
-const gameExports = require('./routes/gameRoutes'); 
+
+// ⭐️ Importamos las funciones específicas y el router del juego por destructuring
+// Esto asume que routes/gameRoutes.js exporta { authenticateToken, router }
+const { authenticateToken, router: gameRouter } = require('./routes/gameRoutes'); 
 
 const app = express();
 app.use(express.json());
@@ -16,11 +18,6 @@ const port = process.env.PORT || 3000;
 pool.connect()
   .then(() => console.log('✅ Conectado a la base de datos de Neon.'))
   .catch(err => console.error('❌ Error de conexión a la base de datos:', err.message));
-
-
-// Extraemos las propiedades que necesitamos del objeto importado:
-const authenticateToken = gameExports.authenticateToken;
-const gameRouter = gameExports.router; // <-- ¡Renombramos y usamos la propiedad 'router'!
 
 
 // -----------------------------------------------------------------
@@ -37,7 +34,7 @@ app.use('/api', authRoutes);
 
 // Rutas del Juego (Build, Generate-Resources)
 // Usamos el middleware de autenticación aquí para proteger todas las rutas de juego
-app.use('/api', authenticateToken, gameRouter); // Ahora pasamos el objeto router correcto
+app.use('/api', authenticateToken, gameRouter); // Ahora pasamos los objetos router correctos
 
 app.listen(port, () => {
   console.log(`Servidor escuchando en el puerto ${port}`);
