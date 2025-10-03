@@ -3,10 +3,10 @@ const express = require('express');
 const cors = require('cors'); 
 const pool = require('./db'); // Importamos la conexión
 const authRoutes = require('./routes/authRoutes'); // Importamos rutas de Autenticación
+const gameRoutes = require('./routes/gameRoutes'); // Importamos rutas del Juego
 
-// ⭐️ Importamos las funciones específicas y el router del juego por destructuring
-// Esto asume que routes/gameRoutes.js exporta { authenticateToken, router }
-const { authenticateToken, router: gameRouter } = require('./routes/gameRoutes'); 
+// ⭐️ Importamos el middleware de autenticación desde su archivo dedicado
+const { authenticateToken } = require('./middleware/auth'); 
 
 const app = express();
 app.use(express.json());
@@ -34,7 +34,8 @@ app.use('/api', authRoutes);
 
 // Rutas del Juego (Build, Generate-Resources)
 // Usamos el middleware de autenticación aquí para proteger todas las rutas de juego
-app.use('/api', authenticateToken, gameRouter); // Ahora pasamos los objetos router correctos
+// gameRoutes ahora exporta solo el router, por eso no necesita desestructuración.
+app.use('/api', authenticateToken, gameRoutes); 
 
 app.listen(port, () => {
   console.log(`Servidor escuchando en el puerto ${port}`);

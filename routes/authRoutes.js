@@ -3,10 +3,12 @@ const router = express.Router();
 const pool = require('../db'); 
 const jwt = require('jsonwebtoken'); 
 const bcrypt = require('bcrypt'); 
-const { calculatePopulationStats } = require('../utils/gameUtils'); // Importamos la función de utilidad
+const { calculatePopulationStats } = require('../utils/gameUtils');
+// ⭐️ Importación centralizada:
+const { authenticateToken } = require('../middleware/auth'); 
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const BASE_POPULATION = 10; // Mantenemos la constante aquí para el registro
+const BASE_POPULATION = 10; 
 
 // Función auxiliar para crear el token
 const createToken = (userId, username) => {
@@ -15,20 +17,6 @@ const createToken = (userId, username) => {
         JWT_SECRET, 
         { expiresIn: '7d' } // Token válido por 7 días
     );
-};
-
-// Middleware para verificar el token (para la ruta /api/me)
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Espera un formato "Bearer TOKEN"
-
-    if (token == null) return res.sendStatus(401); 
-
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403); 
-        req.user = user; 
-        next();
-    });
 };
 
 
@@ -132,6 +120,7 @@ router.post('/login', async (req, res) => {
 });
 
 // --- RUTA /api/me (Validar Sesión y Obtener Datos) ---
+// ⭐️ Esta ruta ahora usa el middleware importado
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
