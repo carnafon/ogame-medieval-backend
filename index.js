@@ -51,7 +51,8 @@ const BASE_POPULATION = 10;
 const POPULATION_PER_HOUSE = 5;
 // Cantidad de comida consumida por 1 ciudadano por intervalo de 10s
 const FOOD_CONSUMPTION_PER_CITIZEN = 1
-
+// Tasa de cambio de población por ciclo de producción
+const POPULATION_CHANGE_RATE = 1; 
 
 // Tasa de producción por edificio (por intervalo de 10 segundos)
 const PRODUCTION_RATES = {
@@ -70,22 +71,22 @@ const BUILDING_COSTS = {
 };
 
 // Función auxiliar para calcular las estadísticas de población
-const calculatePopulationStats = (userBuildings) => {
+const calculatePopulationStats = (userBuildings,currentPopFromDB) => {
     let maxPopulation = BASE_POPULATION; // Población base
-    let currentHouses = 0;
+    
     
     userBuildings.forEach(building => {
         if (building.type === 'house') {
-            currentHouses = building.count;
             maxPopulation += building.count * POPULATION_PER_HOUSE;
         }
     });
  
-    // Simplificación: Asumimos que la población actual siempre es la máxima que podemos mantener.
-    // En una lógica más compleja, la población actual crecería lentamente hasta maxPopulation.
+    // La población actual es dinámica y no puede superar el máximo.
+    const currentPopulation = Math.min(currentPopFromDB, maxPopulation);
+
     return {
         max_population: maxPopulation,
-        current_population: maxPopulation 
+        current_population: currentPopulation 
     };
  };
 
@@ -138,17 +139,29 @@ app.post('/api/register', async (req, res) => {
   // 1. Cifrar (Hash) la contraseña
   const hashedPassword = await bcrypt.hash(password, saltRounds);
     
-    // NOTA: Asegúrate de que tu tabla 'users' tenga las columnas 'wood', 'stone', 'food' con valores por defecto.
+    // NOTA: Asegúrate de que tu tabla 'users' tenga las columnas 'wood', 'stone', 'food', 'current poblation con valores por defecto.
   const newUser = await pool.query(
-   'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username, wood, stone, food',
-    [username, hashedPassword]
+   'INSERT INTO users (username, password,current_population) VALUES ($1, $2, $3) RETURNING id, username, wood, stone, food',
+    [username, hashedPassword,BASE_POPULATION]
   );
     
-    const token = createToken(newUser.rows[0].id, newUser.rows[0].username); // Genera el token
+  const token = createToken(newUser.rows[0].id, newUser.rows[0].username); // Genera el token
+
+  const buildingsList = []; 
+    // Usar la población inicial para las estadísticas
+    const populationStats = calculatePopulationStats(buildingsList, BASE_POPULATION);
+
   res.status(201).json({
    message: 'Usuario registrado con éxito.',
-   user: newUser.rows[0],
-   token: token 
+   user:{ ...newUser.rows[0],
+        wood: parseInt(newUser.rows[0].wood, 10),
+        stone: parseInt(newUser.rows[0].stone, 10),
+        food: parseInt(newUser.rows[0].food, 10),
+        current_population: parseInt(newUser.rows[0].current_population, 10),
+   },
+   token: token,
+   buildings: buildingsList,
+   population: populationStats
   });
  } catch (err) {
     if (err.code === '23505') {
@@ -181,12 +194,37 @@ app.post('/api/login', async (req, res) => {
    return res.status(401).json({ message: 'Usuario o contraseña incorrectos.' });
   }
 
+ // Obtener edificios y calcular población
+    const buildingCountResult = await pool.query(
+        'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type', 
+        [user.id]
+    );
+
+    const buildingsList = buildingCountResult.rows.map(row => ({
+        type: row.type,
+        count: parseInt(row.count, 10)
+    }));
+
+    // ⭐️ Pasar la población actual del usuario a las estadísticas
+    const currentPop = parseInt(user.current_population, 10);
+    const populationStats = calculatePopulationStats(buildingsList, currentPop);
+
+
   // 4. Login exitoso: devolver los datos del usuario y recursos
   const token = createToken(user.id, user.username); // Genera el token
 
   res.status(200).json({
    message: `¡Bienvenido de nuevo, ${user.username}!`,
-   user: user,
+   user: {
+    id:user.id,
+    username: user.username,
+    wood: parseInt(user.wood, 10),
+    stone: parseInt(user.stone, 10), 
+    food: parseInt(user.food, 10),
+    current_population: currentPop
+   },
+   buildings: buildingsList,
+   population: populationStats, // <-- Enviamos las estadísticas de población
    token: token 
   });
 
@@ -201,7 +239,8 @@ app.get('/api/me', authenticateToken, async (req, res) => {
     const userId = req.user.id;
         
     const [userResult, buildingCountResult] = await Promise.all([
-      pool.query('SELECT id, username, wood, stone, food FROM users WHERE id = $1', [userId]),
+            // ⭐️ Incluir current_population en la selección
+      pool.query('SELECT id, username, wood, stone, food, current_population FROM users WHERE id = $1', [userId]),
       pool.query('SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type', [userId])
     ]);
 
@@ -217,14 +256,23 @@ app.get('/api/me', authenticateToken, async (req, res) => {
         }));
 
      // Calcular estadísticas de población
-    const populationStats = calculatePopulationStats(buildingsList);    
+    const currentPop = parseInt(user.current_population, 10);   
+    const populationStats = calculatePopulationStats(buildingsList, currentPop);
 
     // Devuelve los datos del usuario y sus edificios
     res.status(200).json({
      message: `Sesión reanudada para ${user.username}.`,
-      user: user,
-      buildings: buildingsList,
-      population: populationStats
+     user: {
+                id: user.id,
+                username: user.username,
+                // ⭐️ Importante: Convertir recursos a INT al enviarlos al frontend
+                wood: parseInt(user.wood, 10), 
+                stone: parseInt(user.stone, 10), 
+                food: parseInt(user.food, 10),
+                current_population: currentPop // ⭐️ Incluir la población actual
+            },
+            buildings: buildingsList,
+            population: populationStats
     });
 
   } catch (err) {
@@ -260,13 +308,16 @@ app.post('/api/build', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Usuario no encontrado.' });
     }
 
-    let user = currentResources.rows[0];
+   
 
-    // ⭐️ FIX: Asegurar que los recursos sean números enteros antes de la resta para evitar errores de tipo.
-        let currentWood = parseInt(user.wood, 10);
-        let currentStone = parseInt(user.stone, 10);
-        let currentFood = parseInt(user.food, 10);
-console.log(`Recursos actuales - Madera: ${currentWood}, Piedra: ${currentStone}, Comida: ${currentFood}`);
+   // ⭐️ FIX: Convertir explícitamente a enteros antes de comparar
+   const user = {
+            wood: parseInt(currentResources.rows[0].wood, 10),
+            stone: parseInt(currentResources.rows[0].stone, 10),
+            food: parseInt(currentResources.rows[0].food, 10),
+            current_population: parseInt(currentResources.rows[0].current_population, 10), // ⭐️ Obtener población
+        };
+
     // 3. Verificar si hay suficientes recursos
     if (user.wood < cost.wood || user.stone < cost.stone || user.food < cost.food) {
       await client.query('ROLLBACK');
@@ -305,13 +356,19 @@ console.log(`Recursos actuales - Madera: ${currentWood}, Piedra: ${currentStone}
       count: parseInt(row.count, 10)
     }));
 
-    const populationStats = calculatePopulationStats(buildingsList);
+    const populationStats = calculatePopulationStats(buildingsList, user.current_population);
 
     res.status(200).json({
       message: `¡Construido con éxito! Has añadido 1 ${buildingType}.`,
-      user: updatedUser,
+     user: {
+                username: updatedUserRaw.username,
+                wood: parseInt(updatedUserRaw.wood, 10),
+                stone: parseInt(updatedUserRaw.stone, 10),
+                food: parseInt(updatedUserRaw.food, 10),
+                current_population: parseInt(updatedUserRaw.current_population, 10), // ⭐️ Incluir población actual
+            },
       buildings: buildingsList,
-      population: populationStats  // <-- Enviamos la lista de edificios
+            population: populationStats
     });
 
   } catch (err) {
@@ -354,7 +411,7 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
         
         // 4. Obtener los recursos actuales del usuario (y bloquear la fila)
         const currentResources = await client.query(
-      'SELECT wood, stone, food FROM users WHERE id = $1 FOR UPDATE', 
+      'SELECT wood, stone, food, current_population FROM users WHERE id = $1 FOR UPDATE', 
       [userId]
     );
 
@@ -369,6 +426,24 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
         const currentWood = parseInt(user.wood, 10);
         const currentStone = parseInt(user.stone, 10);
         const currentFood = parseInt(user.food, 10);
+        const currentPopulation = parseInt(user.current_population, 10);
+
+          // ---------------------------------------------
+        // ⭐️ LÓGICA DE POBLACIÓN DINÁMICA
+        // ---------------------------------------------
+        let newPopulation = populationStats.current_population;
+        const maxPopulation = populationStats.max_population;
+        const netFoodProduction = production.food;
+
+        if (netFoodProduction >= 0) {
+            // Superávit de comida: la población crece (hasta el máximo)
+            newPopulation = Math.min(maxPopulation, newPopulation + POPULATION_CHANGE_RATE);
+        } else {
+            // Déficit de comida: la población decrece (mínimo 1)
+            newPopulation = Math.max(1, newPopulation - POPULATION_CHANGE_RATE);
+        }
+
+
 
         // 5. Aplicar producción y asegurar que la comida no sea negativa
         const newWood = currentWood + production.wood;
@@ -384,7 +459,7 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
                 food = $3
              WHERE id = $4
              RETURNING wood, stone, food, username`,
-            [newWood, newStone, newFood, userId]
+            [newWood, newStone, newFood, userId, newPopulation]
         );
 
         await client.query('COMMIT'); // Confirmar la transacción
@@ -394,11 +469,16 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
         // 7. Responder al cliente
         res.status(200).json({
             message: `Generación: Madera: ${production.wood >= 0 ? '+' : ''}${production.wood}, Piedra: ${production.stone >= 0 ? '+' : ''}${production.stone}, Comida: ${production.food >= 0 ? '+' : ''}${production.food}`,
-            user: updatedUser,
+             user: {
+                username: updatedUserRaw.username,
+                wood: parseInt(updatedUserRaw.wood, 10),
+                stone: parseInt(updatedUserRaw.stone, 10),
+                food: parseInt(updatedUserRaw.food, 10),
+                current_population: finalPopulationStats.current_population, // ⭐️ La población final
+            },
             buildings: buildingsList,
-            population: populationStats
+            population: finalPopulationStats
         });
-
 
     } catch (err) {
         await client.query('ROLLBACK');
