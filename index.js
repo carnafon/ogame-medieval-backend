@@ -420,13 +420,20 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
             return res.status(404).json({ message: 'Usuario no encontrado.' });
         }
         
-        const user = currentResources.rows[0];
+        
 
-        // ⭐️ FIX: Asegurar que los recursos sean números enteros antes del cálculo
-        const currentWood = parseInt(user.wood, 10);
-        const currentStone = parseInt(user.stone, 10);
-        const currentFood = parseInt(user.food, 10);
-        const currentPopulation = parseInt(user.current_population, 10);
+          // ⭐️ FIX: Convertir explícitamente a enteros
+        const user = {
+            wood: parseInt(currentResources.rows[0].wood, 10),
+            stone: parseInt(currentResources.rows[0].stone, 10),
+            food: parseInt(currentResources.rows[0].food, 10),
+            current_population: parseInt(currentResources.rows[0].current_population, 10), // ⭐️ Obtener población actual
+        };
+
+
+        populationStats = calculatePopulationStats(buildingsList, user.current_population);
+        production = calculateProduction(buildingsList, populationStats);
+
 
           // ---------------------------------------------
         // ⭐️ LÓGICA DE POBLACIÓN DINÁMICA
@@ -434,6 +441,7 @@ app.post('/api/generate-resources', authenticateToken, async (req, res) => {
         let newPopulation = populationStats.current_population;
         const maxPopulation = populationStats.max_population;
         const netFoodProduction = production.food;
+        
 
         if (netFoodProduction >= 0) {
             // Superávit de comida: la población crece (hasta el máximo)
