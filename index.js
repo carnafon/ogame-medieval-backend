@@ -7,6 +7,9 @@ const cors = require('cors'); // Necesario para que el frontend pueda comunicars
 const jwt = require('jsonwebtoken'); // <-- Añade esto al inicio de index.js
 const JWT_SECRET = process.env.JWT_SECRET; // Obtiene el secreto del .env
 
+
+const bcrypt = require('bcrypt');// Para hashear contraseñas 
+
 const app = express();
 app.use(express.json());
 app.use(cors());
@@ -55,11 +58,13 @@ app.get('/', (req, res) => {
 // Ruta para registrar un nuevo usuario
 app.post('/api/register', async (req, res) => {
   const { username, password } = req.body;
-
+  const saltRounds = 10;// Nivel de dificultad para el cifrado
   try {
+    // 1. Cifrar (Hash) la contraseña
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
     const newUser = await pool.query(
       'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *',
-      [username, password]
+      [username, hashedPassword]
     );
     const token = createToken(newUser.id, newUser.username); // Genera el token
     res.status(201).json({
@@ -97,7 +102,8 @@ app.post('/api/login', async (req, res) => {
     // 3. Verificar la contraseña (¡ADVERTENCIA: Aún no es segura!)
     // NOTA: Estamos comparando texto plano. En un proyecto real, usarías una librería
     // como bcrypt para verificar la contraseña hasheada: await bcrypt.compare(password, user.password)
-    if (user.password !== password) {
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
       return res.status(401).json({ message: 'Usuario o contraseña incorrectos.' });
     }
 
