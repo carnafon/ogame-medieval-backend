@@ -28,6 +28,20 @@ const createToken = (userId, username) => {
     );
 };
 
+// Middleware para verificar el token (lo usaremos para validar la sesión)
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Espera un formato "Bearer TOKEN"
+
+    if (token == null) return res.sendStatus(401); // No autorizado
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403); // Token inválido o expirado
+        req.user = user; // El payload decodificado (id, username) se añade al request
+        next();
+    });
+};
+// --- RUTAS DE AUTENTICACIÓN (Registro, Login) ---
 // Comprueba la conexión a la base de datos
 pool.connect()
   .then(() => console.log('Conectado a la base de datos de Neon.'))
@@ -101,6 +115,33 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// --- RUTA /api/me (Validar Sesión y Obtener Datos) ---
+app.get('/api/me', authenticateToken, async (req, res) => {
+    try {
+        // El middleware 'authenticateToken' ya verificó el token y nos dio el req.user.id
+        const userResult = await pool.query(
+            'SELECT * FROM users WHERE id = $1',
+            [req.user.id]
+        );
+
+        const user = userResult.rows[0];
+
+        if (!user) {
+            return res.status(404).json({ message: 'Usuario no encontrado.' });
+        }
+        
+        // Devuelve los datos del usuario, manteniendo la sesión activa
+        res.status(200).json({
+            message: `Sesión reanudada para ${user.username}.`,
+            user: user
+        });
+
+    } catch (err) {
+        res.status(500).json({ message: 'Error al reanudar la sesión.', error: err.message });
+    }
+});
+
+////////////////////////////LOGICA DE RECURSOS PASIVOS////////////////////////////
 
 // Lógica de generación pasiva de recursos (se ejecuta cada minuto)
 setInterval(async () => {
