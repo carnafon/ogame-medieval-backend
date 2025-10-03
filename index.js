@@ -238,6 +238,8 @@ app.post('/api/build', authenticateToken, async (req, res) => {
 
   // 1. Verificar si el tipo de edificio es válido
   const cost = BUILDING_COSTS[buildingType];
+
+  console.log("Tipo de edificio solicitado:", buildingType);
   if (!cost) {
     return res.status(400).json({ message: 'Tipo de edificio no válido.' });
   }
@@ -264,7 +266,7 @@ app.post('/api/build', authenticateToken, async (req, res) => {
         let currentWood = parseInt(user.wood, 10);
         let currentStone = parseInt(user.stone, 10);
         let currentFood = parseInt(user.food, 10);
-
+console.log(`Recursos actuales - Madera: ${currentWood}, Piedra: ${currentStone}, Comida: ${currentFood}`);
     // 3. Verificar si hay suficientes recursos
     if (user.wood < cost.wood || user.stone < cost.stone || user.food < cost.food) {
       await client.query('ROLLBACK');
