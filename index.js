@@ -235,7 +235,7 @@ app.get('/api/me', authenticateToken, async (req, res) => {
 //RUTA CONSTRUCCION
 app.post('/api/build', authenticateToken, async (req, res) => {
   const userId = req.user.id;
-
+  const { buildingType } = req.body; 
   // 1. Verificar si el tipo de edificio es válido
   const cost = BUILDING_COSTS[buildingType];
 
