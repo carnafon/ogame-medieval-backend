@@ -267,4 +267,37 @@ router.post('/generate-resources', async (req, res) => {
     }
 });
 
+// -----------------------------------------------------------------
+// ⭐️ RUTA EXPLORACIÓN (MAPA)
+// -----------------------------------------------------------------
+
+// RUTA: Ver el mapa (coordenadas de todos los jugadores)
+router.get('/map', async (req, res) => {
+    const userId = req.user.id;
+    try {
+        // Obtener la ubicación y el nombre de usuario de TODOS los jugadores
+        const mapData = await pool.query(
+            'SELECT id, username, x_coord, y_coord FROM users'
+        );
+
+        const usersOnMap = mapData.rows.map(user => ({
+            id: user.id,
+            username: user.username,
+            x_coord: parseInt(user.x_coord, 10),
+            y_coord: parseInt(user.y_coord, 10),
+            // Indicamos si es el usuario actual para que el frontend lo pueda destacar
+            is_current_user: user.id === userId, 
+        }));
+
+        res.status(200).json(usersOnMap);
+
+    } catch (err) {
+        console.error('Error al obtener datos del mapa:', err.message);
+        res.status(500).json({ message: 'Error al obtener datos del mapa.', error: err.message });
+    }
+});
+
+
+
+
 module.exports = router;
