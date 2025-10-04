@@ -21,7 +21,9 @@ pool.connect()
 		// Iniciar job de generación pasiva de recursos (opcional: configurar intervalo con ENV)
 		const { startResourceGenerator } = require('./jobs/resourceGenerator');
 		const intervalSec = process.env.RESOURCE_GENERATOR_INTERVAL_SECONDS ? parseInt(process.env.RESOURCE_GENERATOR_INTERVAL_SECONDS, 10) : undefined;
-		startResourceGenerator({ intervalSeconds: intervalSec });
+	const woodPerTick = process.env.RESOURCE_GENERATOR_WOOD_PER_TICK ? parseFloat(process.env.RESOURCE_GENERATOR_WOOD_PER_TICK) : undefined;
+	const stonePerTick = process.env.RESOURCE_GENERATOR_STONE_PER_TICK ? parseFloat(process.env.RESOURCE_GENERATOR_STONE_PER_TICK) : undefined;
+	startResourceGenerator({ intervalSeconds: intervalSec, woodPerTick: woodPerTick, stonePerTick: stonePerTick });
 	})
 	.catch(err => console.error('❌ Error de conexión a la base de datos:', err.message));
 

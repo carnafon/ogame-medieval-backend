@@ -7,8 +7,13 @@ const POPULATION_CHANGE_RATE = 1; // cambio de población por tick
 const TICK_SECONDS = 10; // debe coincidir con gameUtils TICK_SECONDS
 
 let intervalHandle = null;
+let currentOptions = {
+    intervalSeconds: DEFAULT_INTERVAL_SECONDS,
+    woodPerTick: 2,
+    stonePerTick: 1
+};
 
-async function processUser(userId) {
+async function processUser(userId, options) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -40,14 +45,21 @@ async function processUser(userId) {
 
         // Calcular población y producción acumulada
         const popStats = calculatePopulationStats(buildings, parseInt(dbRow.current_population, 10));
-        const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
+    const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
 
-        let newWood = parseInt(dbRow.wood, 10) + accrued.wood;
-        let newStone = parseInt(dbRow.stone, 10) + accrued.stone;
+    // Aplicar sumas fijas por tick configurables (por ejemplo para eventos o balance)
+    const woodPerTick = options && options.woodPerTick ? parseFloat(options.woodPerTick) : 0;
+    const stonePerTick = options && options.stonePerTick ? parseFloat(options.stonePerTick) : 0;
+
+    const ticks = Math.floor(secondsElapsed / TICK_SECONDS);
+    const extraWoodFromFixed = ticks * Math.floor(woodPerTick);
+    const extraStoneFromFixed = ticks * Math.floor(stonePerTick);
+
+    let newWood = parseInt(dbRow.wood, 10) + accrued.wood + extraWoodFromFixed;
+    let newStone = parseInt(dbRow.stone, 10) + accrued.stone + extraStoneFromFixed;
         let newFood = Math.max(0, parseInt(dbRow.food, 10) + accrued.food);
 
         // Ajuste de población escalado por número de ticks pasados
-        const ticks = Math.floor(secondsElapsed / TICK_SECONDS);
         let newPopulation = popStats.current_population;
         const maxPopulation = popStats.max_population;
         if (ticks > 0) {
@@ -81,7 +93,7 @@ async function runOnce() {
         for (const row of res.rows) {
             // procesar secuencialmente para evitar sobrecargar la DB; si quieres paralelizar, limitar concurrency
             // No await aquí sería paralelizar, pero lo dejamos secuencial por simplicidad y seguridad.
-            await processUser(row.id);
+            await processUser(row.id, currentOptions);
         }
     } catch (err) {
         console.error('Error running resource generator job:', err.message);
@@ -90,13 +102,14 @@ async function runOnce() {
 
 function startResourceGenerator(options = {}) {
     const intervalSeconds = options.intervalSeconds || DEFAULT_INTERVAL_SECONDS;
+    currentOptions = Object.assign({}, currentOptions, options);
     if (intervalHandle) return;
     // Ejecutar inmediatamente y luego cada intervalo
     runOnce().catch(err => console.error('Initial resource generator run failed:', err.message));
     intervalHandle = setInterval(() => {
         runOnce().catch(err => console.error('Resource generator run failed:', err.message));
     }, intervalSeconds * 1000);
-    console.log(`Resource generator started, interval ${intervalSeconds}s`);
+    console.log(`Resource generator started, interval ${intervalSeconds}s, woodPerTick=${currentOptions.woodPerTick}, stonePerTick=${currentOptions.stonePerTick}`);
 }
 
 function stopResourceGenerator() {
