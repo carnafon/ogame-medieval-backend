@@ -312,13 +312,28 @@ module.exports = router;
 router.get('/map', async (req, res) => {
     try {
         const userId = req.user && req.user.id ? req.user.id : 'unknown';
-        // Posiciones simuladas (lat, lon) dentro de España
-        const players = [
+        // Caja geográfica aproximada para la península ibérica (coincide con frontend)
+        const bbox = { minLat: 36.0, maxLat: 44.5, minLon: -9.5, maxLon: 3.5 };
+        const MAP_SIZE = 100; // tamaño de la rejilla
+
+        // Posiciones simuladas en lat/lon
+        const latlonPlayers = [
             { id: userId, lat: 40.4168, lon: -3.7038 }, // Madrid (usuario actual)
             { id: 'user-1', lat: 41.3851, lon: 2.1734 }, // Barcelona
             { id: 'user-2', lat: 37.3891, lon: -5.9845 }, // Sevilla
             { id: 'user-3', lat: 43.2630, lon: -2.9350 }  // Bilbao
         ];
+
+        // Convertir lat/lon a coordenadas de rejilla (x,y)
+        const players = latlonPlayers.map(p => {
+            const lat = Math.max(bbox.minLat, Math.min(bbox.maxLat, p.lat));
+            const lon = Math.max(bbox.minLon, Math.min(bbox.maxLon, p.lon));
+            const nx = (lon - bbox.minLon) / (bbox.maxLon - bbox.minLon); // 0..1
+            const ny = 1 - (lat - bbox.minLat) / (bbox.maxLat - bbox.minLat); // 0..1 inverted for y
+            const x = Math.floor(nx * MAP_SIZE);
+            const y = Math.floor(ny * MAP_SIZE);
+            return { id: p.id, x, y };
+        });
 
         res.json({ players });
     } catch (err) {
