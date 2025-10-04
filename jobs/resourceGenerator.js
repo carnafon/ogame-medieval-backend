@@ -4,7 +4,6 @@ const { calculatePopulationStats, calculateProduction, calculateProductionForDur
 // Parámetros configurables
 const DEFAULT_INTERVAL_SECONDS = RESOURCE_GENERATOR_INTERVAL_SECONDS; // cada cuánto se ejecuta el job
 const POPULATION_CHANGE_RATE = 1; // cambio de población por tick
-const TICK_SECONDS = 10; // debe coincidir con gameUtils TICK_SECONDS
 
 let intervalHandle = null;
 let currentOptions = {
