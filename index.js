@@ -16,8 +16,14 @@ const port = process.env.PORT || 3000;
 
 // Middleware para verificar la conexión a la DB
 pool.connect()
-  .then(() => console.log('✅ Conectado a la base de datos de Neon.'))
-  .catch(err => console.error('❌ Error de conexión a la base de datos:', err.message));
+	.then(() => {
+		console.log('✅ Conectado a la base de datos de Neon.');
+		// Iniciar job de generación pasiva de recursos (opcional: configurar intervalo con ENV)
+		const { startResourceGenerator } = require('./jobs/resourceGenerator');
+		const intervalSec = process.env.RESOURCE_GENERATOR_INTERVAL_SECONDS ? parseInt(process.env.RESOURCE_GENERATOR_INTERVAL_SECONDS, 10) : undefined;
+		startResourceGenerator({ intervalSeconds: intervalSec });
+	})
+	.catch(err => console.error('❌ Error de conexión a la base de datos:', err.message));
 
 
 // -----------------------------------------------------------------
