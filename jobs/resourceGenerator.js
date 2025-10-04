@@ -1,16 +1,16 @@
 const pool = require('../db');
-const { calculatePopulationStats, calculateProduction, calculateProductionForDuration } = require('../utils/gameUtils');
+const { calculatePopulationStats, calculateProduction, calculateProductionForDuration, TICK_SECONDS, RESOURCE_GENERATOR_INTERVAL_SECONDS, RESOURCE_GENERATOR_WOOD_PER_TICK, RESOURCE_GENERATOR_STONE_PER_TICK } = require('../utils/gameUtils');
 
 // Parámetros configurables
-const DEFAULT_INTERVAL_SECONDS = 10; // cada cuánto se ejecuta el job
+const DEFAULT_INTERVAL_SECONDS = RESOURCE_GENERATOR_INTERVAL_SECONDS; // cada cuánto se ejecuta el job
 const POPULATION_CHANGE_RATE = 1; // cambio de población por tick
 const TICK_SECONDS = 10; // debe coincidir con gameUtils TICK_SECONDS
 
 let intervalHandle = null;
 let currentOptions = {
     intervalSeconds: DEFAULT_INTERVAL_SECONDS,
-    woodPerTick: 2,
-    stonePerTick: 1
+    woodPerTick: RESOURCE_GENERATOR_WOOD_PER_TICK,
+    stonePerTick: RESOURCE_GENERATOR_STONE_PER_TICK
 };
 
 async function processUser(userId, options) {

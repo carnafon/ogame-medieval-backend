@@ -16,6 +16,11 @@ const PRODUCTION_RATES = {
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)
 const TICK_SECONDS = 10;
 
+// Configuración del generador de recursos (valores por defecto centralizados aquí)
+const RESOURCE_GENERATOR_INTERVAL_SECONDS = 10; // intervalo de ejecución del job
+const RESOURCE_GENERATOR_WOOD_PER_TICK = 2; // suma fija de madera por tick
+const RESOURCE_GENERATOR_STONE_PER_TICK = 1; // suma fija de piedra por tick
+
 
 // -----------------------------------------------------------------
 // ⭐️ FUNCIONES AUXILIARES
@@ -111,5 +116,14 @@ const calculateProductionForDuration = (userBuildings, populationStats, seconds)
 module.exports = {
     calculatePopulationStats,
     calculateProduction,
-    calculateProductionForDuration
+    calculateProductionForDuration,
+    // Constantes exportadas
+    TICK_SECONDS,
+    RESOURCE_GENERATOR_INTERVAL_SECONDS,
+    RESOURCE_GENERATOR_WOOD_PER_TICK,
+    RESOURCE_GENERATOR_STONE_PER_TICK
 };
+
+
+
+
