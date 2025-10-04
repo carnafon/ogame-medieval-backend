@@ -38,7 +38,7 @@ router.post('/register', async (req, res) => {
 
     // Incluir current_population en la inserción y retorno
         const newUser = await pool.query(
-            'INSERT INTO users (username, password, current_population, last_resource_update) VALUES ($1, $2, $3, $4) RETURNING id, username, wood, stone, food, current_population, last_resource_update',
+            'INSERT INTO users (username, password, current_population, last_resource_update,x_coord, y_coord) VALUES ($1, $2, $3, $4) RETURNING id, username, wood, stone, food, current_population, last_resource_update, x_coord, y_coord',
             [username, hashedPassword, BASE_POPULATION, new Date().toISOString(),x,y]
         );
       
