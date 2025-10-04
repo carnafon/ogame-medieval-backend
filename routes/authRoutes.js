@@ -3,7 +3,7 @@ const router = express.Router();
 const pool = require('../db'); 
 const jwt = require('jsonwebtoken'); 
 const bcrypt = require('bcrypt'); 
-const { calculatePopulationStats } = require('../utils/gameUtils');
+const { calculatePopulationStats,findAvailableCoordinates } = require('../utils/gameUtils');
 // ⭐️ Importación centralizada:
 const { authenticateToken } = require('../middleware/auth'); 
 
@@ -31,10 +31,15 @@ router.post('/register', async (req, res) => {
   try {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
       
+// ⭐️ 1. Encontrar coordenadas aleatorias y disponibles
+    // Necesitas implementar findAvailableCoordinates en utils/gameUtils.js
+    const { x, y } = await findAvailableCoordinates(pool); 
+
+
     // Incluir current_population en la inserción y retorno
         const newUser = await pool.query(
             'INSERT INTO users (username, password, current_population, last_resource_update) VALUES ($1, $2, $3, $4) RETURNING id, username, wood, stone, food, current_population, last_resource_update',
-            [username, hashedPassword, BASE_POPULATION, new Date().toISOString()]
+            [username, hashedPassword, BASE_POPULATION, new Date().toISOString(),x,y]
         );
       
     const token = createToken(newUser.rows[0].id, newUser.rows[0].username); 
@@ -49,6 +54,8 @@ router.post('/register', async (req, res) => {
             stone: parseInt(newUser.rows[0].stone, 10),
             food: parseInt(newUser.rows[0].food, 10),
             current_population: parseInt(newUser.rows[0].current_population, 10),
+            x_coord: parseInt(newUser.rows[0].x_coord, 10), // ⭐️ Incluimos X
+            y_coord: parseInt(newUser.rows[0].y_coord, 10), // ⭐️ Incluimos Y
         },
       token: token,
       buildings: buildingsList,
@@ -68,7 +75,7 @@ router.post('/login', async (req, res) => {
 
   try {
         const userResult = await pool.query(
-            'SELECT id, username, password, wood, stone, food, current_population, last_resource_update FROM users WHERE username = $1',
+            'SELECT id, username, password, wood, stone, food, current_population, last_resource_update,x_coord, y_coord FROM users WHERE username = $1',
             [username]
         );
 
@@ -107,7 +114,9 @@ router.post('/login', async (req, res) => {
         wood: parseInt(user.wood, 10),
         stone: parseInt(user.stone, 10), 
         food: parseInt(user.food, 10),
-        current_population: currentPop
+        current_population: currentPop,
+        x_coord: parseInt(user.x_coord, 10), // ⭐️ Incluimos X
+        y_coord: parseInt(user.y_coord, 10), // ⭐️ Incluimos Y
       },
       buildings: buildingsList,
       population: populationStats, 
@@ -152,7 +161,9 @@ router.get('/me', authenticateToken, async (req, res) => {
                 wood: parseInt(user.wood, 10), 
                 stone: parseInt(user.stone, 10), 
                 food: parseInt(user.food, 10),
-                current_population: currentPop
+                current_population: currentPop,
+                x_coord: parseInt(user.x_coord, 10), // ⭐️ Incluimos X
+                y_coord: parseInt(user.y_coord, 10), // ⭐️ Incluimos Y
             },
             buildings: buildingsList,
             population: populationStats

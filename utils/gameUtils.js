@@ -4,6 +4,7 @@
 const BASE_POPULATION = 10;
 const POPULATION_PER_HOUSE = 5;
 const FOOD_CONSUMPTION_PER_CITIZEN = 1;
+const MAP_SIZE = 100; // ⭐️ Nuevo: Tamaño máximo del mapa (100x100)
 
 // Tasa de producción por edificio (por intervalo de 10 segundos)
 const PRODUCTION_RATES = {
@@ -25,6 +26,43 @@ const RESOURCE_GENERATOR_STONE_PER_TICK = 1; // suma fija de piedra por tick
 // -----------------------------------------------------------------
 // ⭐️ FUNCIONES AUXILIARES
 // -----------------------------------------------------------------
+
+
+/**
+ * Busca coordenadas aleatorias (X, Y) que no estén ocupadas por otro usuario.
+ * @param {object} pool Conexión a la base de datos (pg Pool).
+ * @returns {Promise<{x: number, y: number}>} Coordenadas únicas.
+ */
+const findAvailableCoordinates = async (pool) => {
+    let x, y;
+    let isOccupied = true;
+    let attempts = 0;
+
+    // Intentamos 50 veces para encontrar un lugar vacío antes de fallar
+    while (isOccupied && attempts < 50) {
+        // Genera coordenadas aleatorias entre 0 y MAP_SIZE - 1
+        x = Math.floor(Math.random() * MAP_SIZE);
+        y = Math.floor(Math.random() * MAP_SIZE);
+        attempts++;
+
+        // Consultar si algún otro usuario ya tiene estas coordenadas
+        const result = await pool.query(
+            'SELECT id FROM users WHERE x_coord = $1 AND y_coord = $2',
+            [x, y]
+        );
+
+        if (result.rows.length === 0) {
+            isOccupied = false;
+        }
+    }
+
+    if (isOccupied) {
+        // En un juego real, esto nunca debería pasar, pero lo manejamos
+        throw new Error("No se pudo encontrar una coordenada disponible después de 50 intentos.");
+    }
+
+    return { x, y };
+};
 
 /**
  * Calcula la población máxima y la población actual ajustada.
@@ -121,7 +159,8 @@ module.exports = {
     TICK_SECONDS,
     RESOURCE_GENERATOR_INTERVAL_SECONDS,
     RESOURCE_GENERATOR_WOOD_PER_TICK,
-    RESOURCE_GENERATOR_STONE_PER_TICK
+    RESOURCE_GENERATOR_STONE_PER_TICK,
+    findAvailableCoordinates
 };
 
 
