@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db'); 
-const { calculatePopulationStats, calculateProduction } = require('../utils/gameUtils'); // Importamos funciones de utilidad
+const { calculatePopulationStats, calculateProduction, calculateProductionForDuration } = require('../utils/gameUtils'); // Importamos funciones de utilidad
 const { authenticateToken } = require('../middleware/auth'); // Importamos el middleware centralizado
 
 // -----------------------------------------------------------------
@@ -38,23 +38,51 @@ router.post('/build', async (req, res) => {
     try {
         await client.query('BEGIN'); 
 
-        // 1. Obtener recursos y población actuales del usuario
-        const currentResources = await client.query(
-            'SELECT wood, stone, food, current_population FROM users WHERE id = $1 FOR UPDATE', 
-            [userId]
-        );
+        // 1. Obtener recursos, población y timestamp del último update
+        // Nota: la tabla users debería tener la columna last_resource_update (timestamp without time zone)
+        // Si no existe, ejecutar en la DB:
+        // ALTER TABLE users ADD COLUMN last_resource_update TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW();
+        const currentResources = await client.query(
+            'SELECT wood, stone, food, current_population, last_resource_update FROM users WHERE id = $1 FOR UPDATE', 
+            [userId]
+        );
 
         if (currentResources.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ message: 'Usuario no encontrado.' });
         }
 
-        const user = {
-            wood: parseInt(currentResources.rows[0].wood, 10),
-            stone: parseInt(currentResources.rows[0].stone, 10),
-            food: parseInt(currentResources.rows[0].food, 10),
-            current_population: parseInt(currentResources.rows[0].current_population, 10), 
+        const dbRow = currentResources.rows[0];
+        const user = {
+            wood: parseInt(dbRow.wood, 10),
+            stone: parseInt(dbRow.stone, 10),
+            food: parseInt(dbRow.food, 10),
+            current_population: parseInt(dbRow.current_population, 10),
+            last_resource_update: dbRow.last_resource_update ? new Date(dbRow.last_resource_update) : new Date()
         };
+
+        // Acumular producción pendiente desde last_resource_update (lazy accrual)
+        const now = new Date();
+        const secondsElapsed = Math.max(0, Math.floor((now - user.last_resource_update) / 1000));
+        if (secondsElapsed > 0) {
+            const buildingCountResultTemp = await client.query(
+                'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type',
+                [userId]
+            );
+            const buildingsListTemp = buildingCountResultTemp.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
+            const popStatsForCalc = calculatePopulationStats(buildingsListTemp, user.current_population);
+            const accrued = calculateProductionForDuration(buildingsListTemp, popStatsForCalc, secondsElapsed);
+
+            user.wood += accrued.wood;
+            user.stone += accrued.stone;
+            user.food = Math.max(0, user.food + accrued.food);
+
+            // actualizar recursos y timestamp antes de intentar construir
+            await client.query(
+                `UPDATE users SET wood = $1, stone = $2, food = $3, last_resource_update = $4 WHERE id = $5`,
+                [user.wood, user.stone, user.food, now.toISOString(), userId]
+            );
+        }
 
         // 2. Verificar si hay suficientes recursos
         if (user.wood < cost.wood || user.stone < cost.stone || user.food < cost.food) {
@@ -63,15 +91,16 @@ router.post('/build', async (req, res) => {
         }
 
         // 3. Deducir los recursos y obtener los datos actualizados
-        const updatedResources = await client.query(
-            `UPDATE users SET
-                wood = wood - $1,
-                stone = stone - $2,
-                food = food - $3
-             WHERE id = $4
-             RETURNING wood, stone, food, username, current_population`,
-            [cost.wood, cost.stone, cost.food, userId]
-        );
+        const updatedResources = await client.query(
+            `UPDATE users SET
+                wood = wood - $1,
+                stone = stone - $2,
+                food = food - $3,
+                last_resource_update = $5
+             WHERE id = $4
+             RETURNING wood, stone, food, username, current_population`,
+            [cost.wood, cost.stone, cost.food, userId, new Date().toISOString()]
+        );
 
         const updatedUser = updatedResources.rows[0];
 
@@ -138,9 +167,9 @@ router.post('/generate-resources', async (req, res) => {
             count: parseInt(row.count, 10)
         }));
         
-        // 2. Obtener recursos y población actuales del usuario
+        // 2. Obtener recursos, población y last_resource_update del usuario
         const currentResources = await client.query(
-            'SELECT wood, stone, food, current_population FROM users WHERE id = $1 FOR UPDATE', 
+            'SELECT wood, stone, food, current_population, last_resource_update FROM users WHERE id = $1 FOR UPDATE', 
             [userId]
         );
 
@@ -149,14 +178,34 @@ router.post('/generate-resources', async (req, res) => {
             return res.status(404).json({ message: 'Usuario no encontrado.' });
         }
         
+        const dbRow = currentResources.rows[0];
         const user = {
-            wood: parseInt(currentResources.rows[0].wood, 10),
-            stone: parseInt(currentResources.rows[0].stone, 10),
-            food: parseInt(currentResources.rows[0].food, 10),
-            current_population: parseInt(currentResources.rows[0].current_population, 10), 
+            wood: parseInt(dbRow.wood, 10),
+            stone: parseInt(dbRow.stone, 10),
+            food: parseInt(dbRow.food, 10),
+            current_population: parseInt(dbRow.current_population, 10),
+            last_resource_update: dbRow.last_resource_update ? new Date(dbRow.last_resource_update) : new Date()
         };
 
-        // 3. Calcular estadísticas de población y producción
+        // Acumular producción pendiente desde last_resource_update (lazy accrual)
+        const now = new Date();
+        const secondsElapsed = Math.max(0, Math.floor((now - user.last_resource_update) / 1000));
+        if (secondsElapsed > 0) {
+            const popStatsForCalcTemp = calculatePopulationStats(buildingsList, user.current_population);
+            const accrued = calculateProductionForDuration(buildingsList, popStatsForCalcTemp, secondsElapsed);
+
+            user.wood += accrued.wood;
+            user.stone += accrued.stone;
+            user.food = Math.max(0, user.food + accrued.food);
+
+            // persistir recursos acumulados antes de calcular el tick actual
+            await client.query(
+                `UPDATE users SET wood = $1, stone = $2, food = $3, last_resource_update = $4 WHERE id = $5`,
+                [user.wood, user.stone, user.food, now.toISOString(), userId]
+            );
+        }
+
+        // 3. Calcular estadísticas de población y producción (ya con recursos actualizados)
         const populationStats = calculatePopulationStats(buildingsList, user.current_population);
         const production = calculateProduction(buildingsList, populationStats);
         
@@ -176,17 +225,18 @@ router.post('/generate-resources', async (req, res) => {
         const newStone = user.stone + production.stone;
         const newFood = Math.max(0, user.food + netFoodProduction); 
 
-        // 6. Actualizar la base de datos (recursos y población)
-        const updatedResources = await client.query(
-            `UPDATE users SET
-                wood = $1,
-                stone = $2,
-                food = $3,
-                current_population = $5
-              WHERE id = $4
-              RETURNING wood, stone, food, username, current_population`,
-            [newWood, newStone, newFood, userId, newPopulation]
-        );
+                // 6. Actualizar la base de datos (recursos, población y last_resource_update)
+                const updatedResources = await client.query(
+                        `UPDATE users SET
+                                wood = $1,
+                                stone = $2,
+                                food = $3,
+                                current_population = $5,
+                                last_resource_update = $6
+                            WHERE id = $4
+                            RETURNING wood, stone, food, username, current_population`,
+                        [newWood, newStone, newFood, userId, newPopulation, now.toISOString()]
+                );
 
         await client.query('COMMIT'); 
 

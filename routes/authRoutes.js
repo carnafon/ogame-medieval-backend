@@ -32,10 +32,10 @@ router.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
       
     // Incluir current_population en la inserción y retorno
-    const newUser = await pool.query(
-      'INSERT INTO users (username, password, current_population) VALUES ($1, $2, $3) RETURNING id, username, wood, stone, food, current_population',
-      [username, hashedPassword, BASE_POPULATION]
-    );
+        const newUser = await pool.query(
+            'INSERT INTO users (username, password, current_population, last_resource_update) VALUES ($1, $2, $3, $4) RETURNING id, username, wood, stone, food, current_population, last_resource_update',
+            [username, hashedPassword, BASE_POPULATION, new Date().toISOString()]
+        );
       
     const token = createToken(newUser.rows[0].id, newUser.rows[0].username); 
     const buildingsList = []; 
@@ -67,10 +67,10 @@ router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    const userResult = await pool.query(
-      'SELECT id, username, password, wood, stone, food, current_population FROM users WHERE username = $1',
-      [username]
-    );
+        const userResult = await pool.query(
+            'SELECT id, username, password, wood, stone, food, current_population, last_resource_update FROM users WHERE username = $1',
+            [username]
+        );
 
     const user = userResult.rows[0];
     if (!user) {
@@ -125,10 +125,10 @@ router.get('/me', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
         
-    const [userResult, buildingCountResult] = await Promise.all([
-          pool.query('SELECT id, username, wood, stone, food, current_population FROM users WHERE id = $1', [userId]),
-          pool.query('SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type', [userId])
-    ]);
+    const [userResult, buildingCountResult] = await Promise.all([
+        pool.query('SELECT id, username, wood, stone, food, current_population, last_resource_update FROM users WHERE id = $1', [userId]),
+        pool.query('SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type', [userId])
+    ]);
 
     const user = userResult.rows[0];
 

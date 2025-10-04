@@ -13,6 +13,9 @@ const PRODUCTION_RATES = {
     'farm': { food: 10, wood: -1, stone: 0 } 
 };
 
+// Longitud de un "tick" en segundos (coincide con las tasas anteriores)
+const TICK_SECONDS = 10;
+
 
 // -----------------------------------------------------------------
 // ⭐️ FUNCIONES AUXILIARES
@@ -73,7 +76,40 @@ const calculateProduction = (userBuildings, populationStats) => {
     return production;
 };
 
+/**
+ * Calcula la producción acumulada durante una duración en segundos.
+ * Escala la producción definida en PRODUCTION_RATES (por tick de TICK_SECONDS).
+ * Devuelve números enteros: floor para positivos, ceil para negativos.
+ *
+ * @param {Array<{type:string,count:number}>} userBuildings
+ * @param {{current_population:number}} populationStats
+ * @param {number} seconds
+ * @returns {{wood:number,stone:number,food:number}}
+ */
+const calculateProductionForDuration = (userBuildings, populationStats, seconds) => {
+    if (seconds <= 0) return { wood: 0, stone: 0, food: 0 };
+
+    // Producción por tick (la función calculateProduction devuelve producción por tick)
+    const perTick = calculateProduction(userBuildings, populationStats);
+    const multiplier = seconds / TICK_SECONDS;
+
+    const scaled = {
+        wood: perTick.wood * multiplier,
+        stone: perTick.stone * multiplier,
+        food: perTick.food * multiplier
+    };
+
+    const final = { wood: 0, stone: 0, food: 0 };
+    Object.keys(final).forEach(k => {
+        const v = scaled[k];
+        final[k] = v >= 0 ? Math.floor(v) : Math.ceil(v);
+    });
+
+    return final;
+};
+
 module.exports = {
     calculatePopulationStats,
-    calculateProduction
+    calculateProduction,
+    calculateProductionForDuration
 };
