@@ -303,3 +303,26 @@ router.get('/map', async (req, res) => {
 
 
 module.exports = router;
+
+// --------------------------------------------------
+// RUTA DE PRUEBA /map (dev): devuelve posiciones simuladas con lat/lon
+// --------------------------------------------------
+// Nota: esta ruta está definida al final para permitir requests GET /api/map
+// y requiere autenticación porque gameRoutes se monta con authenticateToken.
+router.get('/map', async (req, res) => {
+    try {
+        const userId = req.user && req.user.id ? req.user.id : 'unknown';
+        // Posiciones simuladas (lat, lon) dentro de España
+        const players = [
+            { id: userId, lat: 40.4168, lon: -3.7038 }, // Madrid (usuario actual)
+            { id: 'user-1', lat: 41.3851, lon: 2.1734 }, // Barcelona
+            { id: 'user-2', lat: 37.3891, lon: -5.9845 }, // Sevilla
+            { id: 'user-3', lat: 43.2630, lon: -2.9350 }  // Bilbao
+        ];
+
+        res.json({ players });
+    } catch (err) {
+        console.error('Error en /map:', err.message);
+        res.status(500).json({ message: 'Error obteniendo mapa.' });
+    }
+});
