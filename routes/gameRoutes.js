@@ -26,10 +26,12 @@ const BUILDING_COSTS = {
 router.post('/build', async (req, res) => {
     // userId viene de req.user.id gracias al middleware authenticateToken en index.js
     const userId = req.user.id; 
-    const { buildingType } = req.body; 
+    const { buildingType } = req.body; 
+    console.log(`build request from user ${userId}:`, req.body);
 
     const cost = BUILDING_COSTS[buildingType];
     if (!cost) {
+        console.warn(`Invalid buildingType received for user ${userId}:`, buildingType);
         return res.status(400).json({ message: 'Tipo de edificio no válido.' });
     }
 
