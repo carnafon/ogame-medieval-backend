@@ -4,14 +4,19 @@
 const BASE_POPULATION = 10;
 const POPULATION_PER_HOUSE = 5;
 const FOOD_CONSUMPTION_PER_CITIZEN = 1;
-const MAP_SIZE = 100; // ⭐️ Nuevo: Tamaño máximo del mapa (100x100)
+
+// --- CONSTANTES DEL MAPA Y COORDENADAS ---
+const MAP_SIZE = 100; // Tamaño máximo del mapa (100x100)
+const COORD_RADIUS = 25; // Radio de la zona de influencia de la facción (ej: 25 unidades alrededor del spawn central)
+// ------------------------------------------
+
 
 // Tasa de producción por edificio (por intervalo de 10 segundos)
 const PRODUCTION_RATES = {
-    'house': { food: 0, wood: 0, stone: 0 }, 
-    'sawmill': { wood: 5, stone: 0, food: -1 },
-    'quarry':{stone:8, wood:0, food:-2}, 
-    'farm': { food: 10, wood: -1, stone: 0 } 
+    'house': { food: 0, wood: 0, stone: 0 }, 
+    'sawmill': { wood: 5, stone: 0, food: -1 },
+    'quarry':{stone:8, wood:0, food:-2}, 
+    'farm': { food: 10, wood: -1, stone: 0 } 
 };
 
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)
@@ -29,37 +34,64 @@ const RESOURCE_GENERATOR_STONE_PER_TICK = 1; // suma fija de piedra por tick
 
 
 /**
- * Busca coordenadas aleatorias (X, Y) que no estén ocupadas por otro usuario.
- * @param {object} pool Conexión a la base de datos (pg Pool).
- * @returns {Promise<{x: number, y: number}>} Coordenadas únicas.
+ * Busca coordenadas desocupadas para el asentamiento dentro de la zona de influencia de una facción.
+ * El asentamiento se colocará en un radio de COORD_RADIUS alrededor del punto de spawn central de la facción.
+ * * @param {object} pool Conexión a la base de datos (pg Pool).
+ * @param {number} factionId ID de la facción elegida por el usuario.
+ * @returns {Promise<{x: number, y: number}>} Coordenadas x e y disponibles.
  */
-const findAvailableCoordinates = async (pool) => {
-    let x, y;
-    let isOccupied = true;
-    let attempts = 0;
+const findAvailableCoordinates = async (pool, factionId) => {
+    if (!factionId) {
+        throw new Error("Se requiere un factionId para determinar la zona de influencia.");
+    }
 
-    // Intentamos 50 veces para encontrar un lugar vacío antes de fallar
-    while (isOccupied && attempts < 50) {
-        // Genera coordenadas aleatorias entre 0 y MAP_SIZE - 1
-        x = Math.floor(Math.random() * MAP_SIZE);
-        y = Math.floor(Math.random() * MAP_SIZE);
+    // 1. Obtener el punto central de spawn de la facción
+    const factionRes = await pool.query(
+        'SELECT spawn_x, spawn_y FROM factions WHERE id = $1',
+        [factionId]
+    );
+
+    if (factionRes.rows.length === 0) {
+        throw new Error(`Facción con ID ${factionId} no encontrada.`);
+    }
+    
+    // NOTA: Asumimos que la tabla 'factions' tiene 'spawn_x' y 'spawn_y'
+    const { spawn_x, spawn_y } = factionRes.rows[0]; 
+    
+    let x, y, isOccupied;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 50;
+    
+    // Bucle para buscar una coordenada desocupada dentro del radio
+    while (isOccupied || attempts === 0) {
+        if (attempts >= MAX_ATTEMPTS) {
+            // Si fallamos, retornamos la coordenada central como último recurso, asumiendo un riesgo de colisión
+            console.warn(`No se encontró coordenada disponible en el radio de influencia después de ${MAX_ATTEMPTS} intentos. Cayendo a las coordenadas centrales.`);
+            return { x: spawn_x, y: spawn_y }; 
+        }
+
+        // Generar desplazamiento aleatorio (-COORD_RADIUS a +COORD_RADIUS)
+        const randX = Math.floor(Math.random() * (2 * COORD_RADIUS + 1)) - COORD_RADIUS;
+        const randY = Math.floor(Math.random() * (2 * COORD_RADIUS + 1)) - COORD_RADIUS;
+
+        // Calcular la posición final
+        const newX = spawn_x + randX;
+        const newY = spawn_y + randY;
+        
+        // Asegurar que las coordenadas estén dentro de los límites del mapa (0 a MAP_SIZE-1)
+        x = Math.min(MAP_SIZE - 1, Math.max(0, newX));
+        y = Math.min(MAP_SIZE - 1, Math.max(0, newY));
+
         attempts++;
 
         // Consultar si algún otro usuario ya tiene estas coordenadas
-        const result = await pool.query(
+        const checkRes = await pool.query(
             'SELECT id FROM users WHERE x_coord = $1 AND y_coord = $2',
             [x, y]
         );
 
-        if (result.rows.length === 0) {
-            isOccupied = false;
-        }
-    }
-
-    if (isOccupied) {
-        // En un juego real, esto nunca debería pasar, pero lo manejamos
-        throw new Error("No se pudo encontrar una coordenada disponible después de 50 intentos.");
-    }
+        isOccupied = checkRes.rows.length > 0;
+    } 
 
     return { x, y };
 };
@@ -71,21 +103,21 @@ const findAvailableCoordinates = async (pool) => {
  * @returns {{max_population: number, current_population: number}}
  */
 const calculatePopulationStats = (userBuildings, currentPopFromDB) => {
-    let maxPopulation = BASE_POPULATION; 
-    
-    userBuildings.forEach(building => {
-        if (building.type === 'house') {
-            maxPopulation += building.count * POPULATION_PER_HOUSE;
-        }
-    });
- 
-    // La población actual no puede superar el máximo.
-    const currentPopulation = Math.min(currentPopFromDB, maxPopulation);
+    let maxPopulation = BASE_POPULATION; 
+    
+    userBuildings.forEach(building => {
+        if (building.type === 'house') {
+            maxPopulation += building.count * POPULATION_PER_HOUSE;
+        }
+    });
+ 
+    // La población actual no puede superar el máximo.
+    const currentPopulation = Math.min(currentPopFromDB, maxPopulation);
 
-    return {
-        max_population: maxPopulation,
-        current_population: currentPopulation 
-    };
+    return {
+        max_population: maxPopulation,
+        current_population: currentPopulation 
+    };
 };
 
 /**
@@ -95,28 +127,28 @@ const calculatePopulationStats = (userBuildings, currentPopFromDB) => {
  * @returns {{wood: number, stone: number, food: number}}
  */
 const calculateProduction = (userBuildings, populationStats) => {
-    let production = { wood: 0, stone: 0, food: 0 };
-    
-    if (!Array.isArray(userBuildings)) {
-        return production;
-    }
-
-    // 1. Calcular producción/consumo fijo de edificios 
-    userBuildings.forEach(building => {
-        const rate = PRODUCTION_RATES[building.type];
-        if (rate && building.count > 0) {
-            production.wood += (rate.wood || 0) * building.count;
-            production.stone += (rate.stone || 0) * building.count;
-            production.food += (rate.food || 0) * building.count;
-        }
-    });
+    let production = { wood: 0, stone: 0, food: 0 };
     
-    // 2. Calcular Consumo de Comida basado en la Población actual
-    const foodConsumption = populationStats.current_population * -FOOD_CONSUMPTION_PER_CITIZEN;
-    production.food += foodConsumption;
-    
+    if (!Array.isArray(userBuildings)) {
+        return production;
+    }
 
-    return production;
+    // 1. Calcular producción/consumo fijo de edificios 
+    userBuildings.forEach(building => {
+        const rate = PRODUCTION_RATES[building.type];
+        if (rate && building.count > 0) {
+            production.wood += (rate.wood || 0) * building.count;
+            production.stone += (rate.stone || 0) * building.count;
+            production.food += (rate.food || 0) * building.count;
+        }
+    });
+    
+    // 2. Calcular Consumo de Comida basado en la Población actual
+    const foodConsumption = populationStats.current_population * -FOOD_CONSUMPTION_PER_CITIZEN;
+    production.food += foodConsumption;
+    
+
+    return production;
 };
 
 /**
@@ -160,9 +192,7 @@ module.exports = {
     RESOURCE_GENERATOR_INTERVAL_SECONDS,
     RESOURCE_GENERATOR_WOOD_PER_TICK,
     RESOURCE_GENERATOR_STONE_PER_TICK,
+    MAP_SIZE,
+    COORD_RADIUS, // Exportamos el radio de influencia
     findAvailableCoordinates
 };
-
-
-
-
