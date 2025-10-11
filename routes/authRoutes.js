@@ -30,6 +30,9 @@ router.post('/register', async (req, res) => {
     const { username, password, factionId } = req.body; 
     const saltRounds = 10;
 
+//log para ver el id de faccion pasadoi
+    console.log("Faction ID recibido en /register:", factionId);
+
     // Validación de campos obligatorios
     if (!username || !password || !factionId) {
         return res.status(400).json({ message: 'Faltan campos: username, password y factionId son obligatorios.' });
