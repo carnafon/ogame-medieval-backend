@@ -24,14 +24,9 @@ const createToken = (userId, username) => {
 // --- RUTAS PÚBLICAS ---
 // -----------------------------------------------------------------
 
-// Ruta para registrar un nuevo usuario/asentamiento
+// -----------------------Ruta para registrar un nuevo usuario/asentamiento-------------------------
 router.post('/register', async (req, res) => {
-    // ⭐️ AHORA ESPERAMOS factionId en el body
     const { username, password, factionId } = req.body; 
-    const saltRounds = 10;
-
-//log para ver el id de faccion pasadoi
-    console.log("Faction ID recibido en /register:", factionId);
 
     // Validación de campos obligatorios
     if (!username || !password || !factionId) {
@@ -39,157 +34,168 @@ router.post('/register', async (req, res) => {
     }
 
     try {
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        const hashedPassword = await bcrypt.hash(password, 10);
         
-        // ⭐️ 1. Encontrar coordenadas aleatorias y disponibles usando el factionId
-        const { x, y } = await findAvailableCoordinates(pool, factionId); 
 
-        // ⭐️ 2. Insertar el nuevo usuario, incluyendo faction_id, x_coord e y_coord
+        // 1️⃣ Insertar usuario
         const newUser = await pool.query(
-            // El orden de los parámetros DEBE coincidir con el array de valores:
-            'INSERT INTO users (username, password, faction_id, current_population, last_resource_update, x_coord, y_coord) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, username, wood, stone, food, current_population, last_resource_update, x_coord, y_coord, faction_id',
-            [username, hashedPassword, factionId, BASE_POPULATION, new Date().toISOString(), x, y] // $3 = factionId, $6 = x, $7 = y
+            'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
+            [username, hashedPassword]
         );
-        
-        const token = createToken(newUser.rows[0].id, newUser.rows[0].username); 
-        const buildingsList = []; 
-        const populationStats = calculatePopulationStats(buildingsList, BASE_POPULATION);
+
+        const userId = newUser.rows[0].id;
+
+        // 2️⃣ Asignar coordenadas aleatorias a la entidad del jugador
+        const { x, y } = await findAvailableCoordinates(pool, factionId);
+
+
+
+        // 3️⃣ Crear entidad del jugador
+        const newEntity = await pool.query(
+            `INSERT INTO entities 
+            (user_id, type, faction_id, x_coord, y_coord, current_population, last_resource_update)
+            VALUES ($1,'player',$2,$3,$4,$5,NOW())
+            RETURNING id, x_coord, y_coord, current_population, last_resource_update, faction_id`,
+            [userId, factionId, x, y, BASE_POPULATION]
+        );
+
+
+        // 4️⃣ Inicializar recursos del jugador
+        const resourceTypes = await pool.query('SELECT id FROM resource_types');
+        const entityId = newEntity.rows[0].id;
+
+        for (const r of resourceTypes.rows) {
+            await pool.query(
+                'INSERT INTO entity_resources (entity_id, resource_type_id, amount) VALUES ($1, $2, 0)',
+                [entityId, r.id]
+            );
+        }
+
+
+        const token = createToken(userId, username);
 
         res.status(201).json({
-            message: 'Asentamiento registrado con éxito.',
-            user: {
-                ...newUser.rows[0],
-                wood: parseInt(newUser.rows[0].wood || 0, 10),
-                stone: parseInt(newUser.rows[0].stone || 0, 10),
-                food: parseInt(newUser.rows[0].food || 0, 10),
-                current_population: parseInt(newUser.rows[0].current_population, 10),
-                x_coord: parseInt(newUser.rows[0].x_coord, 10),
-                y_coord: parseInt(newUser.rows[0].y_coord, 10),
-                faction_id: parseInt(newUser.rows[0].faction_id, 10), // ⭐️ Retornamos el ID de facción
-            },
-            token: token,
-            buildings: buildingsList,
-            population: populationStats
+            message: 'Registro exitoso.',
+            user: { id: userId, username },
+            entity: newEntity.rows[0],
+            token,
+            buildings: [],
+            population: calculatePopulationStats([], BASE_POPULATION)
         });
+
     } catch (err) {
-        if (err.code === '23505') {
-            return res.status(409).json({ message: 'El nombre de usuario ya existe.' });
-        }
-        // Manejo de errores específicos de coordenadas/facción (lanzados desde gameUtils)
-        if (err.message && (err.message.includes('Facción') || err.message.includes('coordenada disponible'))) {
-            return res.status(400).json({ message: err.message });
-        }
-        res.status(500).json({ message: 'Error al registrar el asentamiento.', error: err.message });
+        if (err.code === '23505') return res.status(409).json({ message: 'Usuario ya existe.' });
+        console.error(err);
+        res.status(500).json({ message: 'Error al registrar usuario.', error: err.message });
     }
 });
 
-// Ruta para iniciar sesión
+
+//---------------------------------------------------------------------------------------------------------------------------------//
+
+// ----------------------------Ruta para iniciar sesión-------------------------------
 router.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
-    try {
-        // ⭐️ Seleccionamos faction_id
-        const userResult = await pool.query(
-            'SELECT id, username, password, wood, stone, food, current_population, last_resource_update, x_coord, y_coord, faction_id FROM users WHERE username = $1',
-            [username]
-        );
-
+ try {
+        const userResult = await pool.query('SELECT id, username, password FROM users WHERE username=$1', [username]);
         const user = userResult.rows[0];
-        if (!user) {
+        if (!user || !(await bcrypt.compare(password, user.password)))
             return res.status(401).json({ message: 'Usuario o contraseña incorrectos.' });
-        }
 
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ message: 'Usuario o contraseña incorrectos.' });
-        }
-
-        // Obtener edificios y calcular población
-        const buildingCountResult = await pool.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type', 
-            [user.id]
+        // Obtener entidad del jugador
+        const entityResult = await pool.query(
+            'SELECT * FROM entities WHERE user_id=$1 AND type=$2',
+            [user.id, 'player']
         );
 
-        const buildingsList = buildingCountResult.rows.map(row => ({
-            type: row.type,
-            count: parseInt(row.count, 10)
-        }));
+        const entity = entityResult.rows[0];
 
-        const currentPop = parseInt(user.current_population, 10);
-        const populationStats = calculatePopulationStats(buildingsList, currentPop);
+        // Obtener recursos
+        const resourcesResult = await pool.query(
+            `SELECT rt.id, rt.name, er.amount
+             FROM entity_resources er
+             JOIN resource_types rt ON rt.id=er.resource_type_id
+             WHERE er.entity_id=$1`,
+            [entity.id]
+        );
 
-        const token = createToken(user.id, user.username); 
+        const resources = {};
+        for (const r of resourcesResult.rows) resources[r.name] = parseInt(r.amount, 10);
 
-        res.status(200).json({
-            message: `¡Bienvenido de nuevo, ${user.username}!`,
-            user: {
-                id: user.id,
-                username: user.username,
-                wood: parseInt(user.wood, 10),
-                stone: parseInt(user.stone, 10), 
-                food: parseInt(user.food, 10),
-                current_population: currentPop,
-                x_coord: parseInt(user.x_coord, 10), 
-                y_coord: parseInt(user.y_coord, 10), 
-                faction_id: parseInt(user.faction_id, 10), // ⭐️ Retornamos el ID de facción
-            },
+        const buildingCountResult = await pool.query(
+            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id=$1 GROUP BY type',
+            [entity.id]
+        );
+
+        const buildingsList = buildingCountResult.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
+
+        const populationStats = calculatePopulationStats(buildingsList, parseInt(entity.current_population, 10));
+
+        const token = createToken(user.id, user.username);
+
+        res.json({
+            message: `Bienvenido, ${user.username}`,
+            user: { id: user.id, username: user.username },
+            entity,
+            resources,
             buildings: buildingsList,
-            population: populationStats, 
-            token: token 
+            population: populationStats,
+            token
         });
 
     } catch (err) {
-        res.status(500).json({ message: 'Error al iniciar sesión.', error: err.message });
+        console.error(err);
+        res.status(500).json({ message: 'Error en login', error: err.message });
     }
 });
 
-// --- RUTA /api/me (Validar Sesión y Obtener Datos) ---
+
+// ------------------------------------------------------------------------------------------------------------------------------//
+
+// ----------------------RUTA /api/me (Validar Sesión y Obtener Datos) ---------------------------
 router.get('/me', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
-        
-        // ⭐️ Aseguramos que se seleccionan las coordenadas y el ID de facción
-        const [userResult, buildingCountResult] = await Promise.all([
-            pool.query(
-                'SELECT id, username, wood, stone, food, current_population, last_resource_update, x_coord, y_coord, faction_id FROM users WHERE id = $1', 
-                [userId]
-            ),
-            pool.query('SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type', [userId])
-        ]);
 
+        const userResult = await pool.query('SELECT id, username FROM users WHERE id=$1', [userId]);
         const user = userResult.rows[0];
+        if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
 
-        if (!user) {
-            return res.status(404).json({ message: 'Usuario no encontrado.' });
-        }
-    
-        const buildingsList = buildingCountResult.rows.map(row => ({
-            type: row.type,
-            count: parseInt(row.count, 10)
-        }));
+        const entityResult = await pool.query('SELECT * FROM entities WHERE user_id=$1 AND type=$2', [userId, 'player']);
+        const entity = entityResult.rows[0];
 
-        const currentPop = parseInt(user.current_population, 10);    
-        const populationStats = calculatePopulationStats(buildingsList, currentPop);
+        const resourcesResult = await pool.query(
+            `SELECT rt.name, er.amount
+             FROM entity_resources er
+             JOIN resource_types rt ON rt.id=er.resource_type_id
+             WHERE er.entity_id=$1`,
+            [entity.id]
+        );
 
-        res.status(200).json({
-            message: `Sesión reanudada para ${user.username}.`,
-            user: {
-                id: user.id,
-                username: user.username,
-                wood: parseInt(user.wood, 10), 
-                stone: parseInt(user.stone, 10), 
-                food: parseInt(user.food, 10),
-                current_population: currentPop,
-                x_coord: parseInt(user.x_coord, 10), // ⭐️ Incluimos X
-                y_coord: parseInt(user.y_coord, 10), // ⭐️ Incluimos Y
-                faction_id: parseInt(user.faction_id, 10), // ⭐️ Incluimos Faction ID
-            },
+        const resources = {};
+        for (const r of resourcesResult.rows) resources[r.name] = parseInt(r.amount, 10);
+
+        const buildingCountResult = await pool.query(
+            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id=$1 GROUP BY type',
+            [entity.id]
+        );
+
+        const buildingsList = buildingCountResult.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
+
+        const populationStats = calculatePopulationStats(buildingsList, parseInt(entity.current_population, 10));
+
+        res.json({
+            message: `Sesión reanudada para ${user.username}`,
+            user,
+            entity,
+            resources,
             buildings: buildingsList,
             population: populationStats
         });
-
     } catch (err) {
-        res.status(500).json({ message: 'Error al reanudar la sesión.', error: err.message });
+        console.error(err);
+        res.status(500).json({ message: 'Error al validar sesión', error: err.message });
     }
 });
 
