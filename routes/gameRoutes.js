@@ -112,24 +112,6 @@ router.post('/build', async (req, res) => {
             );
         }
 
-        if (buildingResult.rows.length > 0) {
-            // Incrementar nivel
-            await client.query(
-                `UPDATE buildings
-                 SET level = level + 1
-                 WHERE entity_id = $1 AND type = $2`,
-                [entity.id, buildingType]
-            );
-            console.log(`Incremented level of ${buildingType} for entity ${entity.id}`);
-        } else {
-            // Crear edificio en nivel 1
-            await client.query(
-                `INSERT INTO buildings (entity_id, type) VALUES ($1, $2)`,
-                [entity.id, buildingType]
-            );
-            console.log(`Created ${buildingType} level 1 for entity ${entity.id}`);
-        }
-
         // 5️⃣ Obtener edificios actualizados
         const updatedBuildings = await client.query(
             'SELECT type, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type',
