@@ -20,6 +20,6 @@ jobs:
           SECRET_KEY: ${{ secrets.AI_CRON_SECRET }}
         run: |
           echo "Ejecutando llamada al Web Cron..."
-          curl -X POST "https://https://ogapatrihero.netlify.app//api/run-scheduled-job?key=${SECRET_KEY}" \
+          curl -X POST "https://tu-dominio.com/api/run-scheduled-job?key=${SECRET_KEY}" \
             -H "Content-Type: application/json" \
             -s -o /dev/null -w "%{http_code}\n"
