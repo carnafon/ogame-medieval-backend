@@ -218,24 +218,31 @@ router.get('/me', authenticateToken, async (req, res) => {
     const user = userResult.rows[0];
 
     // 5️⃣ Responder al frontend en formato amigable
-    res.json({
-      message: 'Datos de sesión cargados correctamente.',
-      user: {
-        id: user.id,
-        username: user.username,
-        faction_id: entity.faction_id,
-        faction_name: entity.faction_name,
-        x_coord: entity.x_coord,
-        y_coord: entity.y_coord,
-        resources,
-      },
-      population: {
-        current_population: entity.population || 0,
-        max_population: entity.population || 0, // puedes añadir una fórmula después
-        available_population: entity.population || 0,
-      },
-      buildings,
-    });
+   res.json({
+  message: 'Datos de sesión cargados correctamente.',
+  user: {
+    id: user.id,
+    username: user.username,
+    created_at: user.created_at,
+  },
+  entity: {
+    id: entity.id,
+    faction_id: entity.faction_id,
+    faction_name: entity.faction_name,
+    x_coord: entity.x_coord,
+    y_coord: entity.y_coord,
+    resources,  // aquí sí incluyes los recursos
+    current_population: entity.current_population || 0,
+    max_population: entity.max_population || 0, // o calcula según edificios
+  },
+  buildings,
+  population: {
+    current_population: entity.current_population || 0,
+    max_population: entity.max_population || 0,
+    available_population: (entity.max_population || 0) - (entity.current_population || 0),
+  },
+});
+
   } catch (error) {
     console.error('Error en /me:', error);
     res.status(500).json({ message: 'Error al obtener los datos del usuario', error: error.message });
