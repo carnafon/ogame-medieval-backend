@@ -26,9 +26,9 @@ const BUILDING_COSTS = {
 router.post('/build', async (req, res) => {
     
     const userId = req.user.id; 
-    const { buildingType,entityId } = req.body; 
+    const { buildingType,entity } = req.body; 
     console.log(`build request from user ${userId}:`, req.body);
-    console.log(`Entity ID: ${entityId}, Building Type: ${buildingType}`);
+    console.log(`Entity : ${entity.id}, Building Type: ${buildingType}`);
 
     const cost = BUILDING_COSTS[buildingType];
     if (!cost) {
@@ -49,7 +49,7 @@ router.post('/build', async (req, res) => {
                         JOIN resource_types rt ON ri.resource_type_id = rt.id
                         WHERE ri.entity_id = $1
                         FOR UPDATE`,
-                        [entityId]
+                        [entity.id]
                     );
 
                     const resources = Object.fromEntries(
@@ -83,7 +83,7 @@ router.post('/build', async (req, res) => {
         // 4️⃣ Crear el edificio
         await client.query(
             'INSERT INTO buildings (entity_id, type) VALUES ($1, $2)',
-            [entityId, buildingType]
+            [entity.id, buildingType]
         );
 
         await client.query('COMMIT');
