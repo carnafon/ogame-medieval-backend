@@ -47,12 +47,12 @@ router.post('/build', async (req, res) => {
             [entityId]
         );
 
-        const resources = Object.fromEntries(resQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
+        currentResources = Object.fromEntries(resQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
  // 2️⃣ Verificar si tiene recursos suficientes
         if (
-            (resources.wood || 0) < cost.wood ||
-            (resources.stone || 0) < cost.stone ||
-            (resources.food || 0) < cost.food
+            (currentResources.wood || 0) < cost.wood ||
+            (currentResources.stone || 0) < cost.stone ||
+            (currentResources.food || 0) < cost.food
         ) {
             await client.query('ROLLBACK');
             return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
