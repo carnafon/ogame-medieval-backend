@@ -189,6 +189,7 @@ router.get('/me', authenticateToken, async (req, res) => {
     const resources = {};
     for (const row of resourcesResult.rows) {
       resources[row.name.toLowerCase()] = parseInt(row.amount, 10);
+      console.log(`Recurso: ${row.name}, cantidad: ${row.amount}`);
     }
 
     // 3️⃣ Obtener edificios asociados a la entidad (si existe tabla buildings)
