@@ -16,33 +16,39 @@ async function processUser(userId, options) {
     try {
         await client.query('BEGIN');
 
-        const userRes = await client.query(
-            'SELECT wood, stone, food, current_population, last_resource_update FROM users WHERE id = $1 FOR UPDATE',
-            [userId]
-        );
-        if (userRes.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return;
-        }
 
-        const dbRow = userRes.rows[0];
-        const last = dbRow.last_resource_update ? new Date(dbRow.last_resource_update) : new Date();
-        const now = new Date();
-        const secondsElapsed = Math.max(0, Math.floor((now - last) / 1000));
-        if (secondsElapsed <= 0) {
-            await client.query('COMMIT');
-            return;
-        }
+        // 🔹 Obtener datos base de la entidad (lock para evitar race conditions)
+    const entityRes = await client.query(
+      'SELECT id, entity_type, current_population, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
+      [entityId]
+    );
+
+    if (entityRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return;
+    }
+
+    const entity = entityRes.rows[0];
+    const last = entity.last_resource_update ? new Date(entity.last_resource_update) : new Date();
+    const now = new Date();
+    const secondsElapsed = Math.max(0, Math.floor((now - last) / 1000));
+    if (secondsElapsed <= 0) {
+      await client.query('COMMIT');
+      return;
+    }
+
+
+
 
         // Obtener edificios del usuario
         const bRes = await client.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type',
-            [userId]
+            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id  = $1 GROUP BY type',
+            [entityId]
         );
         const buildings = bRes.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
 
         // Calcular población y producción acumulada
-        const popStats = calculatePopulationStats(buildings, parseInt(dbRow.current_population, 10));
+        const popStats = calculatePopulationStats(buildings, parseInt(entity.current_population, 10));
         const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
 
         // Aplicar sumas fijas por tick configurables
@@ -53,9 +59,39 @@ async function processUser(userId, options) {
         const extraWoodFromFixed = ticks * Math.floor(woodPerTick);
         const extraStoneFromFixed = ticks * Math.floor(stonePerTick);
 
-        let newWood = parseInt(dbRow.wood, 10) + accrued.wood + extraWoodFromFixed;
-        let newStone = parseInt(dbRow.stone, 10) + accrued.stone + extraStoneFromFixed;
-        let newFood = Math.max(0, parseInt(dbRow.food, 10) + accrued.food);
+         // 🔹 Cargar inventario de recursos actual
+         const invRes = await client.query(
+         'SELECT resource_type_id, quantity FROM resource_inventory WHERE entity_id = $1',
+          [entityId]
+      );
+        const inventory = Object.fromEntries(invRes.rows.map(r => [r.resource_type_id, parseInt(r.quantity, 10)]));
+
+    // 🔹 Obtener IDs de tipo de recurso
+        const typeRes = await client.query('SELECT id, name FROM resource_types');
+        const typeMap = Object.fromEntries(typeRes.rows.map(r => [r.name, r.id]));
+
+
+    // 🔹 Actualizar cantidades
+        const newResources = {
+        wood: (inventory[typeMap.wood] || 0) + (accrued.wood || 0) + extraWood,
+        stone: (inventory[typeMap.stone] || 0) + (accrued.stone || 0) + extraStone,
+        food: Math.max(0, (inventory[typeMap.food] || 0) + (accrued.food || 0)),
+        };
+
+    // 🔹 Guardar nuevas cantidades
+        for (const [name, qty] of Object.entries(newResources)) {
+        const resourceId = typeMap[name];
+        if (!resourceId) continue;
+        await client.query(
+            `
+            INSERT INTO resource_inventory (entity_id, resource_type_id, quantity)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (entity_id, resource_type_id)
+            DO UPDATE SET quantity = EXCLUDED.quantity
+            `,
+            [entityId, resourceId, qty]
+        );
+        }
 
         // Ajuste de población escalado por número de ticks pasados
         let newPopulation = popStats.current_population;
@@ -70,10 +106,14 @@ async function processUser(userId, options) {
         }
 
         // Persistir cambios y actualizar last_resource_update
-        await client.query(
-            `UPDATE users SET wood = $1, stone = $2, food = $3, current_population = $4, last_resource_update = $5 WHERE id = $6`,
-            [newWood, newStone, newFood, newPopulation, now.toISOString(), userId]
-        );
+      await client.query(
+      `
+      UPDATE entities
+      SET current_population = $1, last_resource_update = $2
+      WHERE id = $3
+      `,
+      [newPopulation, now.toISOString(), entityId]
+    );
 
         await client.query('COMMIT');
     } catch (err) {
@@ -92,10 +132,10 @@ async function runResourceGeneratorJob() {
     try {
         console.log("-> Iniciando cálculo de recursos para todos los jugadores.");
         // Obtener lista de usuarios
-        const res = await pool.query('SELECT id FROM users');
+        const res = await pool.query('SELECT id FROM entities');
         // Usamos Promise.all para procesar los usuarios en paralelo y terminar más rápido.
         // Si tienes miles de usuarios, considera limitar la concurrencia (ej: a 100).
-        await Promise.all(res.rows.map(row => processUser(row.id, currentOptions)));
+        await Promise.all(res.rows.map(row => processEntity(row.id, currentOptions)));
 
         console.log("-> Generación de recursos completada.");
     } catch (err) {
