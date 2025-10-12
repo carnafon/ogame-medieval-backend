@@ -92,12 +92,24 @@ router.post('/build', async (req, res) => {
 
 router.post('/generate-resources', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-    const { entityId } = req.body;
-    if (!entityId) return res.status(400).json({ message: 'Falta entityId.' });
+
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        // Obtener entidad del usuario
+        const entityRes = await client.query(
+             'SELECT id FROM entities WHERE user_id = $1 LIMIT 1',
+            [userId]
+        );
+
+
+         if (entityRes.rows.length === 0) {
+        client.release();
+        return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
+         }
+
+    const entityId = entityRes.rows[0].id
 
         // 1️⃣ Obtener edificios y recursos actuales
         const buildingsQuery = await client.query(
