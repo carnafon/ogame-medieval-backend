@@ -43,7 +43,7 @@ router.post('/build', async (req, res) => {
         // 1. Obtener recursos, población y timestamp del último update
      
         const currentResources = await client.query(
-             'SELECT resource_type_id, amount FROM resource_inventory WHERE entity_id = $1 FOR UPDATE',
+             'SELECT resource_type_id,B.name, amount FROM resource_inventory A, resource_types B  WHERE A.resource_type_id=B.resource_type_id AND entity_id = $1 FOR UPDATE' ,
             [entityId]
         );
 
