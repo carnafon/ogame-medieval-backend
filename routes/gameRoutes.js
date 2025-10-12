@@ -88,8 +88,53 @@ router.post('/build', async (req, res) => {
             [entity.id, buildingType]
         );
 
+        // 5️⃣ Obtener edificios actualizados
+        const updatedBuildings = await client.query(
+            'SELECT type, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type',
+            [entity.id]
+        );
+
+        // 6️⃣ Obtener entidad actualizada (población, recursos)
+        const updatedEntityRes = await client.query(
+            'SELECT id, current_population, max_population, faction_id, x_coord, y_coord FROM entities WHERE id = $1',
+            [entity.id]
+        );
+        const updatedEntity = updatedEntityRes.rows[0];
+
+        // Obtener recursos actualizados
+        const updatedResourcesRes = await client.query(
+            `SELECT rt.name, ri.amount
+             FROM resource_inventory ri
+             JOIN resource_types rt ON ri.resource_type_id = rt.id
+             WHERE ri.entity_id = $1`,
+            [entity.id]
+        );
+        const updatedResources = Object.fromEntries(
+            updatedResourcesRes.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)])
+        );
+
         await client.query('COMMIT');
-        res.status(200).json({ message: `Construcción de ${buildingType} completada.` });
+
+        // 7️⃣ Enviar respuesta completa al frontend
+        res.status(200).json({
+            message: `Construcción de ${buildingType} completada.`,
+            entity: {
+                id: updatedEntity.id,
+                faction_id: updatedEntity.faction_id,
+                x_coord: updatedEntity.x_coord,
+                y_coord: updatedEntity.y_coord,
+                current_population: updatedEntity.current_population,
+                max_population: updatedEntity.max_population,
+                resources: updatedResources
+            },
+            buildings: updatedBuildings.rows,
+            population: {
+                current_population: updatedEntity.current_population,
+                max_population: updatedEntity.max_population,
+                available_population: updatedEntity.max_population - updatedEntity.current_population
+            }
+        });
+
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Error en construcción:', err.message);
@@ -98,7 +143,6 @@ router.post('/build', async (req, res) => {
         client.release();
     }
 });
-
 // -----------------------------------------------------------------
 // ⚙️ RUTA: GENERAR RECURSOS
 // -----------------------------------------------------------------
