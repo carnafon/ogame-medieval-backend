@@ -135,6 +135,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         }
 
         const entity = entityQuery.rows[0];
+        console.log('Entidad del usuario:', entity);
         const now = new Date();
         const lastUpdate = entity.last_resource_update ? new Date(entity.last_resource_update) : now;
         const secondsElapsed = Math.floor((now - lastUpdate) / 1000);
