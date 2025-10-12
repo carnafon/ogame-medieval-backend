@@ -196,10 +196,10 @@ router.get('/me', authenticateToken, async (req, res) => {
     let buildings = [];
     try {
       const buildingsResult = await pool.query(
-        `SELECT building_type AS type, COUNT(*) AS count
+        `SELECT type AS type, COUNT(*) AS count
          FROM buildings
          WHERE entity_id = $1
-         GROUP BY building_type`,
+         GROUP BY type`,
         [entity.id]
       );
       buildings = buildingsResult.rows.map(b => ({
