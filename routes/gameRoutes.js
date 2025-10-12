@@ -107,13 +107,13 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         const buildings = buildingsQuery.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
 
         const resourcesQuery = await client.query(
-            'SELECT type, amount FROM resources WHERE entity_id = $1 FOR UPDATE',
+            'SELECT type, amount FROM resource_inventory WHERE entity_id = $1 FOR UPDATE',
             [entityId]
         );
         const resources = Object.fromEntries(resourcesQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
 
         const entityQuery = await client.query(
-            'SELECT id, population_current, population_max, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
+            'SELECT id, current_population,maxPopulation, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
             [entityId]
         );
 
@@ -128,7 +128,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         const secondsElapsed = Math.floor((now - lastUpdate) / 1000);
 
         // 2️⃣ Producción acumulada
-        const popStats = calculatePopulationStats(buildings, entity.population_current);
+        const popStats = calculatePopulationStats(buildings, entity.current_population);
         const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
 
         // 3️⃣ Actualizar recursos acumulados
@@ -136,20 +136,21 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         const newStone = (resources.stone || 0) + accrued.stone;
         const newFood = Math.max(0, (resources.food || 0) + accrued.food);
 
-        await client.query(
-            `UPDATE resources SET amount = CASE
-                WHEN type = 'wood' THEN $1
-                WHEN type = 'stone' THEN $2
-                WHEN type = 'food' THEN $3
-                ELSE amount END
-             WHERE entity_id = $4`,
-            [newWood, newStone, newFood, entityId]
+            await client.query(
+        `UPDATE resource_inventory
+        SET amount = CASE resource_type_id
+            WHEN (SELECT id FROM resource_type WHERE name = 'wood') THEN $1
+            WHEN (SELECT id FROM resource_type WHERE name = 'stone') THEN $2
+            WHEN (SELECT id FROM resource_type WHERE name = 'food') THEN $3
+            ELSE amount END
+        WHERE entity_id = $4`,
+        [newWood, newStone, newFood, entityId]
         );
 
         // 4️⃣ Actualizar población y timestamp
         const netFood = accrued.food;
         let newPopulation = entity.population_current;
-        if (netFood >= 0) newPopulation = Math.min(entity.population_max, newPopulation + POPULATION_CHANGE_RATE);
+        if (netFood >= 0) newPopulation = Math.min(entity.maxPopulation, newPopulation + POPULATION_CHANGE_RATE);
         else newPopulation = Math.max(1, newPopulation - POPULATION_CHANGE_RATE);
 
         await client.query(
