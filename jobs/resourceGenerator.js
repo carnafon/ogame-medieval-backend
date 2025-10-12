@@ -10,8 +10,14 @@ const currentOptions = {
     stonePerTick: RESOURCE_GENERATOR_STONE_PER_TICK
 };
 
+/**
+ * Procesa la generación de recursos y población para una sola entidad.
+ * @param {Number} entityId
+ * @param {Object} options
+ */
+
 // Función helper para procesar la lógica de recursos de un solo usuario
-async function processUser(userId, options) {
+async function processEntity(entityId, options) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
