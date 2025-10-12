@@ -123,7 +123,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
             [entityId]
         );
         const resources = Object.fromEntries(resourcesQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
-
+        console.log(`POLLO ${entityId}:`, resources);
         const entityQuery = await client.query(
             'SELECT id, current_population,maxPopulation, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
             [entityId]
@@ -162,12 +162,14 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         // 4️⃣ Actualizar población y timestamp
         const netFood = accrued.food;
         let newPopulation = entity.population_current;
+
+         console.log(`POLLO2 ${entityId}:`, resources);
         if (netFood >= 0) newPopulation = Math.min(entity.maxPopulation, newPopulation + POPULATION_CHANGE_RATE);
         else newPopulation = Math.max(1, newPopulation - POPULATION_CHANGE_RATE);
 
         await client.query(
             `UPDATE entities
-             SET population_current = $1, last_resource_update = $2
+             SET current_population = $1, last_resource_update = $2
              WHERE id = $3`,
             [newPopulation, now.toISOString(), entityId]
         );
