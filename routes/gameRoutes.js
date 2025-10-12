@@ -42,23 +42,28 @@ router.post('/build', async (req, res) => {
 
         // 1. Obtener recursos, población y timestamp del último update
      
-        const currentResources = await client.query(
-             'SELECT resource_type_id,B.name, amount FROM resource_inventory A, resource_types B  WHERE A.resource_type_id=B.resource_type_id AND entity_id = $1 FOR UPDATE' ,
-            [entityId]
-        );
+                            const currentResources = await client.query(
+                        `SELECT rt.name AS type, ri.amount
+                        FROM resource_inventory ri
+                        JOIN resource_types rt ON ri.resource_type_id = rt.id
+                        WHERE ri.entity_id = $1
+                        FOR UPDATE`,
+                        [entityId]
+                    );
 
-        currentResources.rows.map(r => [r.type, parseInt(r.amount, 10)])
+                    const resources = Object.fromEntries(
+                        currentResources.rows.map(r => [r.type.toLowerCase(), parseInt(r.amount, 10)])
+                    );
 
-        console.log('Current resources:', currentResources.rows);
- // 2️⃣ Verificar si tiene recursos suficientes
-        if (
-            (currentResources.wood || 0) < cost.wood ||
-            (currentResources.stone || 0) < cost.stone ||
-            (currentResources.food || 0) < cost.food
-        ) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
-        }
+                    // 2️⃣ Verificar si tiene recursos suficientes
+                    if (
+                        (resources.wood || 0) < cost.wood ||
+                        (resources.stone || 0) < cost.stone ||
+                        (resources.food || 0) < cost.food
+                    ) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
+                    }
 
         // 3️⃣ Descontar recursos
         await client.query(
