@@ -70,15 +70,17 @@ router.post('/build', async (req, res) => {
                     }
 
         // 3️⃣ Descontar recursos
-        await client.query(
-            `UPDATE resource_inventory SET amount = CASE
-                WHEN (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
-                WHEN (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
-                WHEN (SELECT id FROM resource_types WHERE name = 'food') THEN $3
-                ELSE amount END
-             WHERE entity_id = $4`,
+                await client.query(
+            `UPDATE resource_inventory
+            SET amount = amount - CASE
+                WHEN resource_type_id = (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
+                WHEN resource_type_id = (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
+                WHEN resource_type_id = (SELECT id FROM resource_types WHERE name = 'food') THEN $3
+                ELSE 0
+                END
+            WHERE entity_id = $4`,
             [cost.wood, cost.stone, cost.food, entity.id]
-        );
+            );
 
         // 4️⃣ Crear el edificio
         await client.query(
