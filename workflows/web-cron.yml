@@ -3,7 +3,7 @@ name: Run Scheduled Job (Web Cron)
 on:
   schedule:
     # Ejecutar cada hora
-    - cron: "*/1 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: # Permite ejecución manual
     inputs:
       reason:
