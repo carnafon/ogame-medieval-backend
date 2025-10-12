@@ -68,7 +68,7 @@ router.post('/register', async (req, res) => {
             
         console.log(`Probando insertar recurso ${r.id} para la entidad ${entityId}`);
             await pool.query(
-                'INSERT INTO entity_resources (entity_id, resource_type_id, amount) VALUES ($1, $2, 0)',
+                'INSERT INTO resource_inventory (entity_id, resource_type_id, amount) VALUES ($1, $2, 0)',
                 [entityId, r.id]
             );
         }
