@@ -83,7 +83,7 @@ async function processEntity(entityId, options) {
         stone: (inventory[typeMap.stone] || 0) + (accrued.stone || 0) + extraStone,
         food: Math.max(0, (inventory[typeMap.food] || 0) + (accrued.food || 0)),
         };
-
+        console.log(newResources);
     // 🔹 Guardar nuevas cantidades
         for (const [name, qty] of Object.entries(newResources)) {
         const resourceId = typeMap[name];
