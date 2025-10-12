@@ -86,7 +86,7 @@ const findAvailableCoordinates = async (pool, factionId) => {
 
         // Consultar si algún otro usuario ya tiene estas coordenadas
         const checkRes = await pool.query(
-            'SELECT id FROM users WHERE x_coord = $1 AND y_coord = $2',
+            'SELECT id FROM entities WHERE x_coord = $1 AND y_coord = $2',
             [x, y]
         );
 
