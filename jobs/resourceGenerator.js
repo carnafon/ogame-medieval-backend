@@ -62,15 +62,15 @@ async function processEntity(entityId, options) {
         const stonePerTick = options && options.stonePerTick ? parseFloat(options.stonePerTick) : 0;
 
         const ticks = Math.floor(secondsElapsed / TICK_SECONDS);
-        const extraWoodFromFixed = ticks * Math.floor(woodPerTick);
-        const extraStoneFromFixed = ticks * Math.floor(stonePerTick);
+        const extraWood = ticks * Math.floor(woodPerTick);
+        const extraStone= ticks * Math.floor(stonePerTick);
 
          // 🔹 Cargar inventario de recursos actual
          const invRes = await client.query(
          'SELECT resource_type_id, amount FROM resource_inventory WHERE entity_id = $1',
           [entityId]
       );
-        const inventory = Object.fromEntries(invRes.rows.map(r => [r.resource_type_id, parseInt(r.quantity, 10)]));
+        const inventory = Object.fromEntries(invRes.rows.map(r => [r.resource_type_id, parseInt(r.amount, 10)]));
 
     // 🔹 Obtener IDs de tipo de recurso
         const typeRes = await client.query('SELECT id, name FROM resource_types');
