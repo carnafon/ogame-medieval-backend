@@ -57,7 +57,7 @@ router.post('/build', async (req, res) => {
                     );
                     console.log(`Current resources for entity ${entity.id}:`, resources);
 
-                    console.log(`Current ${entityId}:`, currentResources.rows);
+                    console.log(`Current ${entity.id}:`, currentResources.rows);
                     console.log(`Building cost for ${buildingType}:`, cost.wood, cost.stone, cost.food);
                     // 2️⃣ Verificar si tiene recursos suficientes
                     if (
@@ -77,7 +77,7 @@ router.post('/build', async (req, res) => {
                 WHEN (SELECT id FROM resource_types WHERE name = 'food') THEN $3
                 ELSE amount END
              WHERE entity_id = $4`,
-            [cost.wood, cost.stone, cost.food, entityId]
+            [cost.wood, cost.stone, cost.food, entity.id]
         );
 
         // 4️⃣ Crear el edificio
