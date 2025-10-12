@@ -124,7 +124,7 @@ router.post('/build', async (req, res) => {
         } else {
             // Crear edificio en nivel 1
             await client.query(
-                `INSERT INTO buildings (entity_id, type, level) VALUES ($1, $2, 1)`,
+                `INSERT INTO buildings (entity_id, type) VALUES ($1, $2)`,
                 [entity.id, buildingType]
             );
             console.log(`Created ${buildingType} level 1 for entity ${entity.id}`);
