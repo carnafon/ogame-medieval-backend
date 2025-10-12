@@ -212,7 +212,7 @@ router.get('/me', authenticateToken, async (req, res) => {
     let buildings = [];
     try {
       const buildingsResult = await pool.query(
-        `SELECT type AS type, COALESCE(SUM(level), 0) AS level
+        `SELECT type AS type, COALESCE(MAX(level), 0) AS level
          FROM buildings
          WHERE entity_id = $1
          GROUP BY type`,
