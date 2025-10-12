@@ -265,9 +265,30 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
 router.get('/map', authenticateToken, async (req, res) => {
     try {
          const result = await pool.query(`
-            SELECT e.id, u.username AS name, e.x_coord, e.y_coord, e.user_id
-            FROM entities e
-            JOIN users u ON u.id = e.user_id
+            SELECT 
+    e.id,
+    u.username AS name,
+    e.x_coord,
+    e.y_coord,
+    e.user_id,
+    e.faction_id,
+    e.current_population,
+    e.max_population,
+    f.name AS faction_name, 
+    -- Recursos en columnas separadas
+    SUM(CASE WHEN rt.name = 'wood' THEN ri.amount ELSE 0 END) AS wood,
+    SUM(CASE WHEN rt.name = 'stone' THEN ri.amount ELSE 0 END) AS stone,
+    SUM(CASE WHEN rt.name = 'food' THEN ri.amount ELSE 0 END) AS food,
+    -- Opcional: edificios en formato json
+    json_agg(json_build_object('type', b.type, 'count', 1)) AS buildings
+FROM entities e
+JOIN users u ON u.id = e.user_id
+JOIN factions f ON e.faction_id = f.id
+JOIN resource_inventory ri ON e.id = ri.entity_id
+JOIN resource_types rt ON ri.resource_type_id = rt.id
+LEFT JOIN buildings b ON e.id = b.entity_id
+WHERE rt.name IN ('wood','stone','food')
+GROUP BY e.id, u.username, f.name;
         `);
         res.status(200).json(result.rows);
     } catch (err) {
