@@ -43,7 +43,7 @@ router.post('/build', async (req, res) => {
         // 1. Obtener recursos, población y timestamp del último update
      
         const currentResources = await client.query(
-             'SELECT type, amount FROM resource_inventory WHERE entity_id = $1 FOR UPDATE',
+             'SELECT resource_type_id, amount FROM resource_inventory WHERE entity_id = $1 FOR UPDATE',
             [entityId]
         );
 
@@ -61,9 +61,9 @@ router.post('/build', async (req, res) => {
         // 3️⃣ Descontar recursos
         await client.query(
             `UPDATE resource_inventory SET amount = CASE
-                WHEN type = 'wood' THEN amount - $1
-                WHEN type = 'stone' THEN amount - $2
-                WHEN type = 'food' THEN amount - $3
+                WHEN (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
+                WHEN (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
+                WHEN (SELECT id FROM resource_types WHERE name = 'food') THEN $3
                 ELSE amount END
              WHERE entity_id = $4`,
             [cost.wood, cost.stone, cost.food, entityId]
