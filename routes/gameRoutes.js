@@ -114,9 +114,10 @@ router.post('/build', async (req, res) => {
 
         // 5️⃣ Obtener edificios actualizados
         const updatedBuildings = await client.query(
-            'SELECT type, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type',
+            'SELECT type, level AS count FROM buildings WHERE entity_id = $1 GROUP BY type',
             [entity.id]
         );
+
 
         // 6️⃣ Obtener entidad actualizada (población, recursos)
         const updatedEntityRes = await client.query(
