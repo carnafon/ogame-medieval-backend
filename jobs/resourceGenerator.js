@@ -25,7 +25,7 @@ async function processEntity(entityId, options) {
 
         // 🔹 Obtener datos base de la entidad (lock para evitar race conditions)
     const entityRes = await client.query(
-      'SELECT id, entity_type, current_population, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
+      'SELECT id, type, current_population, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
       [entityId]
     );
 
