@@ -152,9 +152,9 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
             await client.query(
         `UPDATE resource_inventory
         SET amount = CASE resource_type_id
-            WHEN (SELECT id FROM resource_type WHERE name = 'wood') THEN $1
-            WHEN (SELECT id FROM resource_type WHERE name = 'stone') THEN $2
-            WHEN (SELECT id FROM resource_type WHERE name = 'food') THEN $3
+            WHEN (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
+            WHEN (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
+            WHEN (SELECT id FROM resource_types WHERE name = 'food') THEN $3
             ELSE amount END
         WHERE entity_id = $4`,
         [newWood, newStone, newFood, entityId]
