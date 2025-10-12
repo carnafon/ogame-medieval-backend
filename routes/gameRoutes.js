@@ -54,7 +54,7 @@ router.post('/build', async (req, res) => {
                     const resources = Object.fromEntries(
                         currentResources.rows.map(r => [r.type.toLowerCase(), parseInt(r.amount, 10)])
                     );
-
+                    console.log(`Current resources for entity ${entityId}:`, resources);
                     // 2️⃣ Verificar si tiene recursos suficientes
                     if (
                         (resources.wood || 0) < cost.wood ||
