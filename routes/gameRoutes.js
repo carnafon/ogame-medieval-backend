@@ -109,7 +109,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
          }
 
-    const entity = entityRes.rows[0].id
+    const entity = entityRes.rows[0];
     const entityId = entity.id;
 
 
@@ -172,17 +172,25 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         await client.query('COMMIT');
 
         // Enviar la entidad completa con recursos al frontend
-        res.status(200).json({
+       res.status(200).json({
             message: 'Recursos actualizados correctamente.',
             entity: {
-                ...entity,
+                id: entity.id,
+                faction_id: entity.faction_id || null,
+                faction_name: entity.faction_name || '',
+                x_coord: entity.x_coord || 0,
+                y_coord: entity.y_coord || 0,
+                current_population: newPopulation,
+                max_population: entity.max_population || 0,
                 resources: newResources
             },
             population: {
                 current_population: newPopulation,
-                max_population: entity.max_population
+                max_population: entity.max_population || 0,
+                available_population: (entity.max_population || 0) - newPopulation
             }
         });
+
 
     } catch (err) {
         await client.query('ROLLBACK');
