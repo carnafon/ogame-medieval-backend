@@ -30,7 +30,7 @@ router.post('/build', async (req, res) => {
     console.log(`build request from user ${userId}:`, req.body);
     console.log(`Entity : ${entity.id}, Building Type: ${buildingType}`);
 
-    const cost = BUILDING_COSTS[buildingType];
+    const costBase = BUILDING_COSTS[buildingType];
     if (!cost) {
         console.warn(`Invalid buildingType received for user ${userId}:`, buildingType);
         return res.status(400).json({ message: 'Tipo de edificio no válido.' });
