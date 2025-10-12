@@ -82,11 +82,30 @@ router.post('/build', async (req, res) => {
             [cost.wood, cost.stone, cost.food, entity.id]
             );
 
-        // 4️⃣ Crear el edificio
-        await client.query(
-            'INSERT INTO buildings (entity_id, type) VALUES ($1, $2)',
+        // 4️⃣ Incrementar nivel si ya existe, o insertar en nivel 1 si no
+        const buildingResult = await client.query(
+            `SELECT level FROM buildings
+             WHERE entity_id = $1 AND type = $2`,
             [entity.id, buildingType]
         );
+
+        if (buildingResult.rows.length > 0) {
+            // Incrementar nivel
+            await client.query(
+                `UPDATE buildings
+                 SET level = level + 1
+                 WHERE entity_id = $1 AND type = $2`,
+                [entity.id, buildingType]
+            );
+            console.log(`Incremented level of ${buildingType} for entity ${entity.id}`);
+        } else {
+            // Crear edificio en nivel 1
+            await client.query(
+                `INSERT INTO buildings (entity_id, type, level) VALUES ($1, $2, 1)`,
+                [entity.id, buildingType]
+            );
+            console.log(`Created ${buildingType} level 1 for entity ${entity.id}`);
+        }
 
         // 5️⃣ Obtener edificios actualizados
         const updatedBuildings = await client.query(

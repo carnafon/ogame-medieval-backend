@@ -196,7 +196,7 @@ router.get('/me', authenticateToken, async (req, res) => {
     let buildings = [];
     try {
       const buildingsResult = await pool.query(
-        `SELECT type AS type, COUNT(*) AS count
+        `SELECT type AS type, COALESCE(SUM(level), 0) AS level
          FROM buildings
          WHERE entity_id = $1
          GROUP BY type`,
@@ -204,7 +204,7 @@ router.get('/me', authenticateToken, async (req, res) => {
       );
       buildings = buildingsResult.rows.map(b => ({
         type: b.type,
-        count: parseInt(b.count, 10),
+        level: parseInt(b.level, 10),
       }));
     } catch (err) {
       console.warn('⚠️ Tabla buildings no encontrada o sin datos:', err.message);
