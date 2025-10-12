@@ -162,7 +162,7 @@ router.get('/me', authenticateToken, async (req, res) => {
 
  // 1️⃣ Buscar la entidad asociada al usuario
     const entityResult = await pool.query(
-      `SELECT e.id, e.type, e.x_coord, e.y_coord, e.population, e.faction_id,
+      `SELECT e.id, e.type, e.x_coord, e.y_coord, e.current_population, e.faction_id,
               f.name AS faction_name
        FROM entities e
        LEFT JOIN factions f ON f.id = e.faction_id
