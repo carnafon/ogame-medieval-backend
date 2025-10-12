@@ -65,13 +65,15 @@ router.post('/register', async (req, res) => {
         const entityId = newEntity.rows[0].id;
 
         for (const r of resourceTypes.rows) {
+            
+        console.log(`Probando insertar recurso ${r.id} para la entidad ${entityId}`);
             await pool.query(
                 'INSERT INTO entity_resources (entity_id, resource_type_id, amount) VALUES ($1, $2, 0)',
                 [entityId, r.id]
             );
         }
 
-
+        console.log(`Nuevo usuario registrado: ${username} (ID: ${userId}) en las coordenadas (${x}, ${y})`);
         const token = createToken(userId, username);
 
         res.status(201).json({
