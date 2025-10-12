@@ -1,0 +1,25 @@
+name: Run Scheduled Job (Web Cron)
+
+on:
+  schedule:
+    # Ejecutar cada hora
+    - cron: "*/1 * * * *"
+  workflow_dispatch: # Permite ejecución manual
+    inputs:
+      reason:
+        description: "Motivo de ejecución manual"
+        required: false
+        default: "Manual run"
+
+jobs:
+  call_web_cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Llamar al endpoint de generación de recursos
+        env:
+          SECRET_KEY: ${{ secrets.AI_CRON_SECRET }}
+        run: |
+          echo "Ejecutando llamada al Web Cron..."
+          curl -X POST "https://tu-dominio.com/api/run-scheduled-job?key=${SECRET_KEY}" \
+            -H "Content-Type: application/json" \
+            -s -o /dev/null -w "%{http_code}\n"
