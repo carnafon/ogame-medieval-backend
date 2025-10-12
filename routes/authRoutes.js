@@ -116,7 +116,7 @@ router.post('/login', async (req, res) => {
         // Obtener recursos
         const resourcesResult = await pool.query(
             `SELECT rt.id, rt.name, er.amount
-             FROM entity_resources er
+             FROM resource_inventory er
              JOIN resource_types rt ON rt.id=er.resource_type_id
              WHERE er.entity_id=$1`,
             [entity.id]
