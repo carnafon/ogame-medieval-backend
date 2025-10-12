@@ -119,7 +119,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         const buildings = buildingsQuery.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
 
         const resourcesQuery = await client.query(
-            'SELECT type, amount FROM resource_inventory WHERE entity_id = $1 FOR UPDATE',
+            'SELECT resource_type_id, amount FROM resource_inventory WHERE entity_id = $1 FOR UPDATE',
             [entityId]
         );
         const resources = Object.fromEntries(resourcesQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
