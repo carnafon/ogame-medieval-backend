@@ -23,7 +23,7 @@ const PRODUCTION_RATES = {
 const TICK_SECONDS = 10;
 
 // Configuración del generador de recursos (valores por defecto centralizados aquí)
-const RESOURCE_GENERATOR_INTERVAL_SECONDS = 100; // intervalo de ejecución del job
+const RESOURCE_GENERATOR_INTERVAL_SECONDS = 10; // intervalo de ejecución del job
 const RESOURCE_GENERATOR_WOOD_PER_TICK = 2; // suma fija de madera por tick
 const RESOURCE_GENERATOR_STONE_PER_TICK = 1; // suma fija de piedra por tick
 
