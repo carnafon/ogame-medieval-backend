@@ -76,6 +76,10 @@ app.use('/api', authRoutes);
 // Rutas del Juego (Build, Generate-Resources)
 app.use('/api', authenticateToken, gameRoutes); 
 
+//rutas de entidades
+const entitiesRoutes = require('./routes/entitiesRoutes');
+app.use('/api/entities', entitiesRoutes);
+
 app.listen(port, () => {
     console.log(`Servidor escuchando en el puerto ${port}`);
 });
