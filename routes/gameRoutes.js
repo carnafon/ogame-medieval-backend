@@ -26,7 +26,7 @@ const BUILDING_COSTS = {
 router.post('/build', async (req, res) => {
     // userId viene de req.user.id gracias al middleware authenticateToken en index.js
     const userId = req.user.id; 
-    const { buildingType } = req.body; 
+    const { buildingType,entityId } = req.body; 
     console.log(`build request from user ${userId}:`, req.body);
 
     const cost = BUILDING_COSTS[buildingType];
@@ -41,303 +41,151 @@ router.post('/build', async (req, res) => {
         await client.query('BEGIN'); 
 
         // 1. Obtener recursos, población y timestamp del último update
-        // Nota: la tabla users debería tener la columna last_resource_update (timestamp without time zone)
-        // Si no existe, ejecutar en la DB:
-        // ALTER TABLE users ADD COLUMN last_resource_update TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW();
+     
         const currentResources = await client.query(
-            'SELECT wood, stone, food, current_population, last_resource_update FROM users WHERE id = $1 FOR UPDATE', 
-            [userId]
+             'SELECT type, amount FROM resources WHERE entity_id = $1 FOR UPDATE',
+            [entityId]
         );
 
-        if (currentResources.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Usuario no encontrado.' });
-        }
-
-        const dbRow = currentResources.rows[0];
-        const user = {
-            wood: parseInt(dbRow.wood, 10),
-            stone: parseInt(dbRow.stone, 10),
-            food: parseInt(dbRow.food, 10),
-            current_population: parseInt(dbRow.current_population, 10),
-            last_resource_update: dbRow.last_resource_update ? new Date(dbRow.last_resource_update) : new Date()
-        };
-
-        // Acumular producción pendiente desde last_resource_update (lazy accrual)
-        const now = new Date();
-        const secondsElapsed = Math.max(0, Math.floor((now - user.last_resource_update) / 1000));
-        if (secondsElapsed > 0) {
-            const buildingCountResultTemp = await client.query(
-                'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type',
-                [userId]
-            );
-            const buildingsListTemp = buildingCountResultTemp.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
-            const popStatsForCalc = calculatePopulationStats(buildingsListTemp, user.current_population);
-            const accrued = calculateProductionForDuration(buildingsListTemp, popStatsForCalc, secondsElapsed);
-
-            user.wood += accrued.wood;
-            user.stone += accrued.stone;
-            user.food = Math.max(0, user.food + accrued.food);
-
-            // actualizar recursos y timestamp antes de intentar construir
-            await client.query(
-                `UPDATE users SET wood = $1, stone = $2, food = $3, last_resource_update = $4 WHERE id = $5`,
-                [user.wood, user.stone, user.food, now.toISOString(), userId]
-            );
-        }
-
-        // 2. Verificar si hay suficientes recursos
-        if (user.wood < cost.wood || user.stone < cost.stone || user.food < cost.food) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
-        }
-
-        // 3. Deducir los recursos y obtener los datos actualizados
-        const updatedResources = await client.query(
-            `UPDATE users SET
-                wood = wood - $1,
-                stone = stone - $2,
-                food = food - $3,
-                last_resource_update = $5
-             WHERE id = $4
-             RETURNING wood, stone, food, username, current_population`,
-            [cost.wood, cost.stone, cost.food, userId, new Date().toISOString()]
-        );
-
-        const updatedUser = updatedResources.rows[0];
-
-        // 4. Registrar el nuevo edificio
-        await client.query(
-            'INSERT INTO buildings (user_id, type) VALUES ($1, $2)',
-            [userId, buildingType]
-        );
-
-        await client.query('COMMIT'); 
-
-        // 5. Obtener lista de edificios y estadísticas de población
-        const buildingCountResult = await client.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type',
-            [userId]
-        );
-
-        const buildingsList = buildingCountResult.rows.map(row => ({
-            type: row.type,
-            count: parseInt(row.count, 10)
-        }));
-        
-        // La población actual es la que no fue modificada por la construcción
-        const populationStats = calculatePopulationStats(buildingsList, user.current_population);
-
-        res.status(200).json({
-            message: `¡Construido con éxito! Has añadido 1 ${buildingType}.`,
-            user: {
-                username: updatedUser.username,
-                wood: parseInt(updatedUser.wood, 10),
-                stone: parseInt(updatedUser.stone, 10),
-                food: parseInt(updatedUser.food, 10),
-                current_population: parseInt(updatedUser.current_population, 10),
-            },
-            buildings: buildingsList,
-            population: populationStats
-        });
-
-    } catch (err) {
-        await client.query('ROLLBACK'); 
-        console.error('Error en la construcción:', err.message);
-        res.status(500).json({ message: 'Error en la construcción.', error: err.message });
-    } finally {
-        client.release();
-    }
-});
-
-// RUTA: Generación periódica de recursos
-router.post('/generate-resources', async (req, res) => {
-    const userId = req.user.id;
-    const client = await pool.connect(); 
-
-    try {
-        await client.query('BEGIN'); 
-
-        // 1. Obtener edificios
-        const buildingCountResult = await client.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE user_id = $1 GROUP BY type', 
-            [userId]
-        );
-        
-        const buildingsList = buildingCountResult.rows.map(row => ({
-            type: row.type,
-            count: parseInt(row.count, 10)
-        }));
-        
-        // 2. Obtener recursos, población y last_resource_update del usuario
-        const currentResources = await client.query(
-            'SELECT wood, stone, food, current_population, last_resource_update FROM users WHERE id = $1 FOR UPDATE', 
-            [userId]
-        );
-
-        if (currentResources.rows.length === 0) {
+        const resources = Object.fromEntries(resQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
+ // 2️⃣ Verificar si tiene recursos suficientes
+        if (
+            (resources.wood || 0) < cost.wood ||
+            (resources.stone || 0) < cost.stone ||
+            (resources.food || 0) < cost.food
+        ) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Usuario no encontrado.' });
-        }
-        
-        const dbRow = currentResources.rows[0];
-        const user = {
-            wood: parseInt(dbRow.wood, 10),
-            stone: parseInt(dbRow.stone, 10),
-            food: parseInt(dbRow.food, 10),
-            current_population: parseInt(dbRow.current_population, 10),
-            last_resource_update: dbRow.last_resource_update ? new Date(dbRow.last_resource_update) : new Date()
-        };
-
-        // Acumular producción pendiente desde last_resource_update (lazy accrual)
-        const now = new Date();
-        const secondsElapsed = Math.max(0, Math.floor((now - user.last_resource_update) / 1000));
-        if (secondsElapsed > 0) {
-            const popStatsForCalcTemp = calculatePopulationStats(buildingsList, user.current_population);
-            const accrued = calculateProductionForDuration(buildingsList, popStatsForCalcTemp, secondsElapsed);
-
-            user.wood += accrued.wood;
-            user.stone += accrued.stone;
-            user.food = Math.max(0, user.food + accrued.food);
-
-            // persistir recursos acumulados antes de calcular el tick actual
-            await client.query(
-                `UPDATE users SET wood = $1, stone = $2, food = $3, last_resource_update = $4 WHERE id = $5`,
-                [user.wood, user.stone, user.food, now.toISOString(), userId]
-            );
+            return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
         }
 
-        // 3. Calcular estadísticas de población y producción (ya con recursos actualizados)
-        const populationStats = calculatePopulationStats(buildingsList, user.current_population);
-        const production = calculateProduction(buildingsList, populationStats);
-        
-        // 4. Lógica de Población Dinámica
-        let newPopulation = populationStats.current_population;
-        const maxPopulation = populationStats.max_population;
-        const netFoodProduction = production.food;
+        // 3️⃣ Descontar recursos
+        await client.query(
+            `UPDATE resources SET amount = CASE
+                WHEN type = 'wood' THEN amount - $1
+                WHEN type = 'stone' THEN amount - $2
+                WHEN type = 'food' THEN amount - $3
+                ELSE amount END
+             WHERE entity_id = $4`,
+            [cost.wood, cost.stone, cost.food, entityId]
+        );
 
-        if (netFoodProduction >= 0) {
-            newPopulation = Math.min(maxPopulation, newPopulation + POPULATION_CHANGE_RATE);
-        } else {
-            newPopulation = Math.max(1, newPopulation - POPULATION_CHANGE_RATE);
-        }
-        
-        // 5. Aplicar producción
-        const newWood = user.wood + production.wood;
-        const newStone = user.stone + production.stone;
-        const newFood = Math.max(0, user.food + netFoodProduction); 
+        // 4️⃣ Crear el edificio
+        await client.query(
+            'INSERT INTO buildings (entity_id, type) VALUES ($1, $2)',
+            [entityId, buildingType]
+        );
 
-                // 6. Actualizar la base de datos (recursos, población y last_resource_update)
-                const updatedResources = await client.query(
-                        `UPDATE users SET
-                                wood = $1,
-                                stone = $2,
-                                food = $3,
-                                current_population = $5,
-                                last_resource_update = $6
-                            WHERE id = $4
-                            RETURNING wood, stone, food, username, current_population`,
-                        [newWood, newStone, newFood, userId, newPopulation, now.toISOString()]
-                );
-
-        await client.query('COMMIT'); 
-
-        const updatedUser = updatedResources.rows[0];
-
-        // 7. Recalcular las estadísticas con la nueva población guardada para la respuesta
-        const finalPopulationStats = calculatePopulationStats(buildingsList, parseInt(updatedUser.current_population, 10));
-
-        res.status(200).json({
-            message: `Generación: Madera: ${production.wood >= 0 ? '+' : ''}${production.wood}, Piedra: ${production.stone >= 0 ? '+' : ''}${production.stone}, Comida: ${production.food >= 0 ? '+' : ''}${production.food}. Población: ${populationStats.current_population} -> ${finalPopulationStats.current_population}.`,
-            user: {
-                username: updatedUser.username,
-                wood: parseInt(updatedUser.wood, 10),
-                stone: parseInt(updatedUser.stone, 10),
-                food: parseInt(updatedUser.food, 10),
-                current_population: finalPopulationStats.current_population,
-            },
-            buildings: buildingsList,
-            population: finalPopulationStats
-        });
-
+        await client.query('COMMIT');
+        res.status(200).json({ message: `Construcción de ${buildingType} completada.` });
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('Error en generate-resources:', err.message);
-        res.status(500).json({ message: 'Error en la generación de recursos.', error: err.message });
+        console.error('Error en construcción:', err.message);
+        res.status(500).json({ message: 'Error en la construcción.', error: err.message });
     } finally {
         client.release();
     }
 });
 
 // -----------------------------------------------------------------
-// ⭐️ RUTA EXPLORACIÓN (MAPA)
+// ⚙️ RUTA: GENERAR RECURSOS
 // -----------------------------------------------------------------
 
-// RUTA: Ver el mapa (coordenadas de todos los jugadores)
-router.get('/map', async (req, res) => {
+router.post('/generate-resources', authenticateToken, async (req, res) => {
     const userId = req.user.id;
+    const { entityId } = req.body;
+    if (!entityId) return res.status(400).json({ message: 'Falta entityId.' });
+
+    const client = await pool.connect();
     try {
-        // Obtener la ubicación y el nombre de usuario de TODOS los jugadores
-        const mapData = await pool.query(
-            'SELECT id, username, x_coord, y_coord FROM users'
+        await client.query('BEGIN');
+
+        // 1️⃣ Obtener edificios y recursos actuales
+        const buildingsQuery = await client.query(
+            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id = $1 GROUP BY type',
+            [entityId]
+        );
+        const buildings = buildingsQuery.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
+
+        const resourcesQuery = await client.query(
+            'SELECT type, amount FROM resources WHERE entity_id = $1 FOR UPDATE',
+            [entityId]
+        );
+        const resources = Object.fromEntries(resourcesQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
+
+        const entityQuery = await client.query(
+            'SELECT id, population_current, population_max, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
+            [entityId]
         );
 
-        const usersOnMap = mapData.rows.map(user => ({
-            id: user.id,
-            username: user.username,
-            x_coord: parseInt(user.x_coord, 10),
-            y_coord: parseInt(user.y_coord, 10),
-            // Indicamos si es el usuario actual para que el frontend lo pueda destacar
-            is_current_user: user.id === userId, 
-        }));
+        if (entityQuery.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Entidad no encontrada.' });
+        }
 
-        res.status(200).json(usersOnMap);
+        const entity = entityQuery.rows[0];
+        const now = new Date();
+        const lastUpdate = entity.last_resource_update ? new Date(entity.last_resource_update) : now;
+        const secondsElapsed = Math.floor((now - lastUpdate) / 1000);
 
+        // 2️⃣ Producción acumulada
+        const popStats = calculatePopulationStats(buildings, entity.population_current);
+        const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
+
+        // 3️⃣ Actualizar recursos acumulados
+        const newWood = (resources.wood || 0) + accrued.wood;
+        const newStone = (resources.stone || 0) + accrued.stone;
+        const newFood = Math.max(0, (resources.food || 0) + accrued.food);
+
+        await client.query(
+            `UPDATE resources SET amount = CASE
+                WHEN type = 'wood' THEN $1
+                WHEN type = 'stone' THEN $2
+                WHEN type = 'food' THEN $3
+                ELSE amount END
+             WHERE entity_id = $4`,
+            [newWood, newStone, newFood, entityId]
+        );
+
+        // 4️⃣ Actualizar población y timestamp
+        const netFood = accrued.food;
+        let newPopulation = entity.population_current;
+        if (netFood >= 0) newPopulation = Math.min(entity.population_max, newPopulation + POPULATION_CHANGE_RATE);
+        else newPopulation = Math.max(1, newPopulation - POPULATION_CHANGE_RATE);
+
+        await client.query(
+            `UPDATE entities
+             SET population_current = $1, last_resource_update = $2
+             WHERE id = $3`,
+            [newPopulation, now.toISOString(), entityId]
+        );
+
+        await client.query('COMMIT');
+        res.status(200).json({
+            message: 'Recursos actualizados correctamente.',
+            resources: { wood: newWood, stone: newStone, food: newFood },
+            population: { current: newPopulation, max: entity.population_max },
+        });
     } catch (err) {
-        console.error('Error al obtener datos del mapa:', err.message);
-        res.status(500).json({ message: 'Error al obtener datos del mapa.', error: err.message });
+        await client.query('ROLLBACK');
+        console.error('Error en generate-resources:', err.message);
+        res.status(500).json({ message: 'Error al generar recursos.', error: err.message });
+    } finally {
+        client.release();
     }
 });
 
+// -----------------------------------------------------------------
+// 🗺️ RUTA: MAPA
+// -----------------------------------------------------------------
 
-
+router.get('/map', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, name, x_coord, y_coord, user_id FROM entities');
+        res.status(200).json(result.rows);
+    } catch (err) {
+        console.error('Error al obtener mapa:', err.message);
+        res.status(500).json({ message: 'Error al obtener mapa.' });
+    }
+});
 
 module.exports = router;
-
-// --------------------------------------------------
-// RUTA DE PRUEBA /map (dev): devuelve posiciones simuladas con lat/lon
-// --------------------------------------------------
-// Nota: esta ruta está definida al final para permitir requests GET /api/map
-// y requiere autenticación porque gameRoutes se monta con authenticateToken.
-router.get('/map', async (req, res) => {
-    try {
-        const userId = req.user && req.user.id ? req.user.id : 'unknown';
-        // Caja geográfica aproximada para la península ibérica (coincide con frontend)
-        const bbox = { minLat: 36.0, maxLat: 44.5, minLon: -9.5, maxLon: 3.5 };
-        const MAP_SIZE = 100; // tamaño de la rejilla
-
-        // Posiciones simuladas en lat/lon
-        const latlonPlayers = [
-            { id: userId, lat: 40.4168, lon: -3.7038 }, // Madrid (usuario actual)
-            { id: 'user-1', lat: 41.3851, lon: 2.1734 }, // Barcelona
-            { id: 'user-2', lat: 37.3891, lon: -5.9845 }, // Sevilla
-            { id: 'user-3', lat: 43.2630, lon: -2.9350 }  // Bilbao
-        ];
-
-        // Convertir lat/lon a coordenadas de rejilla (x,y)
-        const players = latlonPlayers.map(p => {
-            const lat = Math.max(bbox.minLat, Math.min(bbox.maxLat, p.lat));
-            const lon = Math.max(bbox.minLon, Math.min(bbox.maxLon, p.lon));
-            const nx = (lon - bbox.minLon) / (bbox.maxLon - bbox.minLon); // 0..1
-            const ny = 1 - (lat - bbox.minLat) / (bbox.maxLat - bbox.minLat); // 0..1 inverted for y
-            const x = Math.floor(nx * MAP_SIZE);
-            const y = Math.floor(ny * MAP_SIZE);
-            return { id: p.id, x, y };
-        });
-
-        res.json({ players });
-    } catch (err) {
-        console.error('Error en /map:', err.message);
-        res.status(500).json({ message: 'Error obteniendo mapa.' });
-    }
-});
