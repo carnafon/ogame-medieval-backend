@@ -99,7 +99,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         await client.query('BEGIN');
         // Obtener entidad del usuario
         const entityRes = await client.query(
-             'SELECT id FROM entities WHERE user_id = $1 LIMIT 1',
+             'SELECT id, current_population, max_population, last_resource_update FROM entities WHERE user_id = $1 LIMIT 1',
             [userId]
         );
 
@@ -109,65 +109,59 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
          }
 
-    const entityId = entityRes.rows[0].id
+    const entity = entityRes.rows[0].id
+    const entityId = entity.id;
 
-        // 1️⃣ Obtener edificios y recursos actuales
-        const buildingsQuery = await client.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id = $1 GROUP BY type',
-            [entityId]
-        );
-        const buildings = buildingsQuery.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
 
+
+         // Obtener recursos actuales
         const resourcesQuery = await client.query(
-            'SELECT resource_type_id, amount FROM resource_inventory WHERE entity_id = $1 FOR UPDATE',
-            [entityId]
-        );
-        const resources = Object.fromEntries(resourcesQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
-        console.log(`POLLO ${entityId}:`, resources);
-        const entityQuery = await client.query(
-            'SELECT id, current_population,max_population, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
+            `SELECT rt.name, ri.amount
+             FROM resource_inventory ri
+             JOIN resource_types rt ON ri.resource_type_id = rt.id
+             WHERE ri.entity_id = $1 FOR UPDATE`,
             [entityId]
         );
 
-        if (entityQuery.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Entidad no encontrada.' });
-        }
 
-        const entity = entityQuery.rows[0];
-        console.log('Entidad del usuario:', entity);
+ const resources = Object.fromEntries(
+            resourcesQuery.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)])
+        );
+
+        // --- Calcula la producción (ejemplo) ---
         const now = new Date();
         const lastUpdate = entity.last_resource_update ? new Date(entity.last_resource_update) : now;
         const secondsElapsed = Math.floor((now - lastUpdate) / 1000);
 
-        // 2️⃣ Producción acumulada
-        const popStats = calculatePopulationStats(buildings, entity.current_population);
-        const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
+        // Aquí deberías tener tu función de cálculo de recursos: calcula accrued
+        const accrued = {
+            wood: 1 * secondsElapsed,   // ejemplo: +1 madera por segundo
+            stone: 1 * secondsElapsed,  // ejemplo
+            food: 1 * secondsElapsed
+        };
 
-        // 3️⃣ Actualizar recursos acumulados
-        const newWood = (resources.wood || 0) + accrued.wood;
-        const newStone = (resources.stone || 0) + accrued.stone;
-        const newFood = Math.max(0, (resources.food || 0) + accrued.food);
+        // Actualizar recursos acumulados
+        const newResources = {
+            wood: (resources.wood || 0) + accrued.wood,
+            stone: (resources.stone || 0) + accrued.stone,
+            food: Math.max(0, (resources.food || 0) + accrued.food),
+        };
 
-            await client.query(
-        `UPDATE resource_inventory
-        SET amount = CASE resource_type_id
-            WHEN (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
-            WHEN (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
-            WHEN (SELECT id FROM resource_types WHERE name = 'food') THEN $3
-            ELSE amount END
-        WHERE entity_id = $4`,
-        [newWood, newStone, newFood, entityId]
+        // Actualizar tabla resource_inventory
+        await client.query(
+            `UPDATE resource_inventory
+             SET amount = CASE resource_type_id
+                WHEN (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
+                WHEN (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
+                WHEN (SELECT id FROM resource_types WHERE name = 'food') THEN $3
+                ELSE amount
+             END
+             WHERE entity_id = $4`,
+            [newResources.wood, newResources.stone, newResources.food, entityId]
         );
 
-        // 4️⃣ Actualizar población y timestamp
-        const netFood = accrued.food;
-        let newPopulation = entity.current_population;
-
-         console.log(`POLLO2 ${entityId}:`, resources);
-        if (netFood >= 0) newPopulation = Math.min(entity.max_population, newPopulation + POPULATION_CHANGE_RATE);
-        else newPopulation = Math.max(1, newPopulation - POPULATION_CHANGE_RATE);
-
+        // Actualizar población y timestamp
+        let newPopulation = entity.current_population; // ejemplo
         await client.query(
             `UPDATE entities
              SET current_population = $1, last_resource_update = $2
@@ -176,11 +170,20 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         );
 
         await client.query('COMMIT');
+
+        // Enviar la entidad completa con recursos al frontend
         res.status(200).json({
             message: 'Recursos actualizados correctamente.',
-            resources: { wood: newWood, stone: newStone, food: newFood },
-            population: { current: newPopulation, max: entity.max_population },
+            entity: {
+                ...entity,
+                resources: newResources
+            },
+            population: {
+                current_population: newPopulation,
+                max_population: entity.max_population
+            }
         });
+
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Error en generate-resources:', err.message);
