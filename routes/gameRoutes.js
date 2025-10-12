@@ -264,7 +264,11 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
 
 router.get('/map', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, name, x_coord, y_coord, user_id FROM entities');
+         const result = await pool.query(`
+            SELECT e.id, u.username AS name, e.x_coord, e.y_coord, e.user_id
+            FROM entities e
+            JOIN users u ON u.id = e.user_id
+        `);
         res.status(200).json(result.rows);
     } catch (err) {
         console.error('Error al obtener mapa:', err.message);
