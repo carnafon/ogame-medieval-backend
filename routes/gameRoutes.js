@@ -24,10 +24,11 @@ const BUILDING_COSTS = {
 
 // RUTA CONSTRUCCION
 router.post('/build', async (req, res) => {
-    // userId viene de req.user.id gracias al middleware authenticateToken en index.js
+    
     const userId = req.user.id; 
     const { buildingType,entityId } = req.body; 
     console.log(`build request from user ${userId}:`, req.body);
+    console.log(`Entity ID: ${entityId}, Building Type: ${buildingType}`);
 
     const cost = BUILDING_COSTS[buildingType];
     if (!cost) {
