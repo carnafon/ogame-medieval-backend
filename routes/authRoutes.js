@@ -160,45 +160,86 @@ router.get('/me', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const userResult = await pool.query('SELECT id, username FROM users WHERE id=$1', [userId]);
-        const user = userResult.rows[0];
-        if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
+ // 1️⃣ Buscar la entidad asociada al usuario
+    const entityResult = await pool.query(
+      `SELECT e.id, e.type, e.x_coord, e.y_coord, e.population, e.faction_id,
+              f.name AS faction_name
+       FROM entities e
+       LEFT JOIN factions f ON f.id = e.faction_id
+       WHERE e.user_id = $1
+       LIMIT 1`,
+      [userId]
+    );
 
-        const entityResult = await pool.query('SELECT * FROM entities WHERE user_id=$1 AND type=$2', [userId, 'player']);
-        const entity = entityResult.rows[0];
-
-        const resourcesResult = await pool.query(
-            `SELECT rt.name, er.amount
-             FROM resource_inventory er
-             JOIN resource_types rt ON rt.id=er.resource_type_id
-             WHERE er.entity_id=$1`,
-            [entity.id]
-        );
-
-        const resources = {};
-        for (const r of resourcesResult.rows) resources[r.name] = parseInt(r.amount, 10);
-
-        const buildingCountResult = await pool.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id=$1 GROUP BY type',
-            [entity.id]
-        );
-
-        const buildingsList = buildingCountResult.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
-
-        const populationStats = calculatePopulationStats(buildingsList, parseInt(entity.current_population, 10));
-
-        res.json({
-            message: `Sesión reanudada para ${user.username}`,
-            user,
-            entity,
-            resources,
-            buildings: buildingsList,
-            population: populationStats
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'Error al validar sesión', error: err.message });
+    if (entityResult.rows.length === 0) {
+      return res.status(404).json({ message: 'No se encontró ninguna entidad asociada a este usuario.' });
     }
+
+    const entity = entityResult.rows[0];
+
+    // 2️⃣ Obtener inventario de recursos
+    const resourcesResult = await pool.query(
+      `SELECT rt.id AS resource_type_id, rt.name, ri.amount
+       FROM resource_inventory ri
+       JOIN resource_types rt ON ri.resource_type_id = rt.id
+       WHERE ri.entity_id = $1`,
+      [entity.id]
+    );
+
+    const resources = {};
+    for (const row of resourcesResult.rows) {
+      resources[row.name.toLowerCase()] = parseInt(row.amount, 10);
+    }
+
+    // 3️⃣ Obtener edificios asociados a la entidad (si existe tabla buildings)
+    let buildings = [];
+    try {
+      const buildingsResult = await pool.query(
+        `SELECT building_type AS type, COUNT(*) AS count
+         FROM buildings
+         WHERE entity_id = $1
+         GROUP BY building_type`,
+        [entity.id]
+      );
+      buildings = buildingsResult.rows.map(b => ({
+        type: b.type,
+        count: parseInt(b.count, 10),
+      }));
+    } catch (err) {
+      console.warn('⚠️ Tabla buildings no encontrada o sin datos:', err.message);
+    }
+
+    // 4️⃣ Obtener info del usuario base
+    const userResult = await pool.query(
+      `SELECT id, username, created_at FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    const user = userResult.rows[0];
+
+    // 5️⃣ Responder al frontend en formato amigable
+    res.json({
+      message: 'Datos de sesión cargados correctamente.',
+      user: {
+        id: user.id,
+        username: user.username,
+        faction_id: entity.faction_id,
+        faction_name: entity.faction_name,
+        x_coord: entity.x_coord,
+        y_coord: entity.y_coord,
+        resources,
+      },
+      population: {
+        current_population: entity.population || 0,
+        max_population: entity.population || 0, // puedes añadir una fórmula después
+        available_population: entity.population || 0,
+      },
+      buildings,
+    });
+  } catch (error) {
+    console.error('Error en /me:', error);
+    res.status(500).json({ message: 'Error al obtener los datos del usuario', error: error.message });
+  }
 });
 
 module.exports = router;
