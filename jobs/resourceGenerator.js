@@ -67,7 +67,7 @@ async function processEntity(entityId, options) {
 
          // 🔹 Cargar inventario de recursos actual
          const invRes = await client.query(
-         'SELECT resource_type_id, quantity FROM resource_inventory WHERE entity_id = $1',
+         'SELECT resource_type_id, amount FROM resource_inventory WHERE entity_id = $1',
           [entityId]
       );
         const inventory = Object.fromEntries(invRes.rows.map(r => [r.resource_type_id, parseInt(r.quantity, 10)]));
@@ -90,10 +90,10 @@ async function processEntity(entityId, options) {
         if (!resourceId) continue;
         await client.query(
             `
-            INSERT INTO resource_inventory (entity_id, resource_type_id, quantity)
+            INSERT INTO resource_inventory (entity_id, resource_type_id, amount)
             VALUES ($1, $2, $3)
             ON CONFLICT (entity_id, resource_type_id)
-            DO UPDATE SET quantity = EXCLUDED.quantity
+            DO UPDATE SET amount = EXCLUDED.amount
             `,
             [entityId, resourceId, qty]
         );
