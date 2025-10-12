@@ -125,7 +125,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         const resources = Object.fromEntries(resourcesQuery.rows.map(r => [r.type, parseInt(r.amount, 10)]));
         console.log(`POLLO ${entityId}:`, resources);
         const entityQuery = await client.query(
-            'SELECT id, current_population,maxPopulation, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
+            'SELECT id, current_population,max_population, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
             [entityId]
         );
 
@@ -162,10 +162,10 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
 
         // 4️⃣ Actualizar población y timestamp
         const netFood = accrued.food;
-        let newPopulation = entity.population_current;
+        let newPopulation = entity.current_population;
 
          console.log(`POLLO2 ${entityId}:`, resources);
-        if (netFood >= 0) newPopulation = Math.min(entity.maxPopulation, newPopulation + POPULATION_CHANGE_RATE);
+        if (netFood >= 0) newPopulation = Math.min(entity.max_population, newPopulation + POPULATION_CHANGE_RATE);
         else newPopulation = Math.max(1, newPopulation - POPULATION_CHANGE_RATE);
 
         await client.query(
@@ -179,7 +179,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
         res.status(200).json({
             message: 'Recursos actualizados correctamente.',
             resources: { wood: newWood, stone: newStone, food: newFood },
-            population: { current: newPopulation, max: entity.population_max },
+            population: { current: newPopulation, max: entity.max_population },
         });
     } catch (err) {
         await client.query('ROLLBACK');
