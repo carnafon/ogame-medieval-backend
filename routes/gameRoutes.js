@@ -55,11 +55,26 @@ router.post('/build', async (req, res) => {
                     const resources = Object.fromEntries(
                         currentResources.rows.map(r => [r.type.toLowerCase(), parseInt(r.amount, 10)])
                     );
-                    console.log(`Current resources for entity ${entity.id}:`, resources);
+                 
 
-                    console.log(`Current ${entity.id}:`, currentResources.rows);
-                    console.log(`Building cost for ${buildingType}:`, cost.wood, cost.stone, cost.food);
-                    // 2️⃣ Verificar si tiene recursos suficientes
+
+                     // 2️⃣ Obtener nivel actual del edificio
+                const buildingResult = await client.query(
+                       `SELECT level FROM buildings
+                   WHERE entity_id = $1 AND type = $2`,
+                  [entity.id, buildingType]
+             );
+
+                      const currentLevel = buildingResult.rows.length > 0 ? buildingResult.rows[0].level : 0;
+                    const factor = 1.7; // Ajusta para subir más rápido o lento
+                    const cost = {
+                    wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
+                      stone: Math.ceil(costBase.stone * Math.pow(currentLevel + 1, factor)),
+                      food: Math.ceil(costBase.food * Math.pow(currentLevel + 1, factor)),
+                     };
+
+
+                    // 3 Verificar si tiene recursos suficientes
                     if (
                         (resources.wood || 0) < cost.wood ||
                         (resources.stone || 0) < cost.stone ||
@@ -69,7 +84,7 @@ router.post('/build', async (req, res) => {
                         return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
                     }
 
-        // 3️⃣ Descontar recursos
+        // 4 Descontar recursos
                 await client.query(
             `UPDATE resource_inventory
             SET amount = amount - CASE
@@ -82,12 +97,20 @@ router.post('/build', async (req, res) => {
             [cost.wood, cost.stone, cost.food, entity.id]
             );
 
-        // 4️⃣ Incrementar nivel si ya existe, o insertar en nivel 1 si no
-        const buildingResult = await client.query(
-            `SELECT level FROM buildings
-             WHERE entity_id = $1 AND type = $2`,
-            [entity.id, buildingType]
-        );
+        // 5️⃣ Incrementar nivel o crear edificio
+        if (currentLevel > 0) {
+            await client.query(
+                `UPDATE buildings
+                 SET level = level + 1
+                 WHERE entity_id = $1 AND type = $2`,
+                [entity.id, buildingType]
+            );
+        } else {
+            await client.query(
+                `INSERT INTO buildings (entity_id, type, level) VALUES ($1, $2, 1)`,
+                [entity.id, buildingType]
+            );
+        }
 
         if (buildingResult.rows.length > 0) {
             // Incrementar nivel
