@@ -61,7 +61,7 @@ router.post('/build', async (req, res) => {
                      // 2️⃣ Obtener nivel actual del edificio
                 const buildingResult = await client.query(
                        `SELECT level FROM buildings
-                   WHERE entity_id = $1 AND type = $2`,
+                   WHERE entity_id = $1 AND type = $2 LIMIT 1`,
                   [entity.id, buildingType]
              );
 
@@ -114,7 +114,7 @@ router.post('/build', async (req, res) => {
 
         // 5️⃣ Obtener edificios actualizados
         const updatedBuildings = await client.query(
-            'SELECT type, level AS count FROM buildings WHERE entity_id = $1 GROUP BY type',
+            'SELECT type, MAX(level) AS level FROM buildings WHERE entity_id = $1 GROUP BY type',
             [entity.id]
         );
 
