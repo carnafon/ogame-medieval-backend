@@ -70,6 +70,10 @@ app.get('/', (req, res) => {
     res.send('Servidor de OGame Medieval está en línea.');
 });
 
+//rutas de facciones (publico)
+const factionRoutes = require('./routes/factionRoutes');
+app.use('/api/factions', factionRoutes);
+
 // Rutas de Autenticación (Login, Register, Me)
 app.use('/api', authRoutes); 
 
@@ -80,9 +84,7 @@ app.use('/api', authenticateToken, gameRoutes);
 const entitiesRoutes = require('./routes/entitiesRoutes');
 app.use('/api/entities', entitiesRoutes);
 
-//rutas de facciones
-const factionRoutes = require('./routes/factionRoutes');
-app.use('/api/factions', factionRoutes);
+
 
 
 app.listen(port, () => {
