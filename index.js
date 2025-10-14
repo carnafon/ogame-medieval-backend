@@ -80,6 +80,11 @@ app.use('/api', authenticateToken, gameRoutes);
 const entitiesRoutes = require('./routes/entitiesRoutes');
 app.use('/api/entities', entitiesRoutes);
 
+//rutas de facciones
+const factionRoutes = require('./routes/factionRoutes');
+app.use('/api/factions', factionRoutes);
+
+
 app.listen(port, () => {
     console.log(`Servidor escuchando en el puerto ${port}`);
 });
