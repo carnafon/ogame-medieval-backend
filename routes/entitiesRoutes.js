@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { getResources, setResourcesWithClient } = require('../utils/resourcesService');
 
 /* ======================================================
    ENTIDADES (jugadores, IA, NPCs, etc.)
@@ -149,22 +150,11 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 router.get('/:id/resources', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query(
-      `SELECT rt.id AS resource_type_id, rt.name, rt.description, ri.amount
-       FROM resource_inventory ri
-       JOIN resource_types rt ON rt.id = ri.resource_type_id
-       WHERE ri.entity_id = $1`,
-      [id]
-    );
-
+    const resources = await getResources(id);
+    // Return in similar shape (array with id/name/amount) — resource_type_id is not available from getResources, return name/amount
     res.status(200).json({
       entity_id: parseInt(id, 10),
-      resources: result.rows.map(r => ({
-        id: r.resource_type_id,
-        name: r.name,
-        description: r.description,
-        amount: parseInt(r.amount, 10)
-      })),
+      resources: Object.keys(resources).map(name => ({ name, amount: resources[name] }))
     });
   } catch (err) {
     console.error(err);
@@ -185,21 +175,31 @@ router.patch('/:id/resources', authenticateToken, async (req, res) => {
   }
 
   try {
-    await pool.query('BEGIN');
+    // Read current resources, apply deltas, and write back within one transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await getResources(id);
+      const newResources = { ...current };
+      for (const { resource_type_id, amount_change } of updates) {
+        // We need to map resource_type_id -> name; query it
+        const rt = await client.query('SELECT name FROM resource_types WHERE id = $1', [resource_type_id]);
+        if (rt.rows.length === 0) throw new Error(`Tipo de recurso no encontrado: ${resource_type_id}`);
+        const name = rt.rows[0].name.toLowerCase();
+        newResources[name] = Math.max(0, (newResources[name] || 0) + (amount_change || 0));
+      }
 
-    for (const { resource_type_id, amount_change } of updates) {
-      await pool.query(`
-        INSERT INTO resource_inventory (entity_id, resource_type_id, amount)
-        VALUES ($1, $2, GREATEST($3, 0))
-        ON CONFLICT (entity_id, resource_type_id)
-        DO UPDATE SET amount = GREATEST(resource_inventory.amount + $3, 0);
-      `, [id, resource_type_id, amount_change]);
+      // Persist using client
+      await setResourcesWithClient(client, id, newResources);
+      await client.query('COMMIT');
+      res.json({ message: 'Inventario actualizado correctamente.', resources: newResources });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
-
-    await pool.query('COMMIT');
-    res.json({ message: 'Inventario actualizado correctamente.' });
   } catch (err) {
-    await pool.query('ROLLBACK');
     res.status(500).json({ message: 'Error al actualizar recursos', error: err.message });
   }
 });

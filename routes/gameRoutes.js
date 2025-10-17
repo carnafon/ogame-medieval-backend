@@ -164,19 +164,8 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
 
 
 
-         // Obtener recursos actuales
-        const resourcesQuery = await client.query(
-            `SELECT rt.name, ri.amount
-             FROM resource_inventory ri
-             JOIN resource_types rt ON ri.resource_type_id = rt.id
-             WHERE ri.entity_id = $1 FOR UPDATE`,
-            [entityId]
-        );
-
-
- const resources = Object.fromEntries(
-            resourcesQuery.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)])
-        );
+         // Obtener recursos actuales (servicio)
+        const resources = await require('../utils/resourcesService').getResources(entityId);
 
         // --- Calcula la producción (ejemplo) ---
         const now = new Date();
@@ -197,18 +186,8 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
             food: Math.max(0, (resources.food || 0) + accrued.food),
         };
 
-        // Actualizar tabla resource_inventory
-        await client.query(
-            `UPDATE resource_inventory
-             SET amount = CASE resource_type_id
-                WHEN (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
-                WHEN (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
-                WHEN (SELECT id FROM resource_types WHERE name = 'food') THEN $3
-                ELSE amount
-             END
-             WHERE entity_id = $4`,
-            [newResources.wood, newResources.stone, newResources.food, entityId]
-        );
+    // Actualizar tabla resource_inventory usando el servicio centralizado (misma transacción)
+    await require('../utils/resourcesService').setResourcesWithClient(client, entityId, newResources);
 
         // Actualizar población y timestamp
         let newPopulation = entity.current_population; // ejemplo

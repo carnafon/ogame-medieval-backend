@@ -65,39 +65,18 @@ async function processEntity(entityId, options) {
         const extraWood = ticks * Math.floor(woodPerTick);
         const extraStone= ticks * Math.floor(stonePerTick);
 
-         // 🔹 Cargar inventario de recursos actual
-         const invRes = await client.query(
-         'SELECT resource_type_id, amount FROM resource_inventory WHERE entity_id = $1',
-          [entityId]
-      );
-        const inventory = Object.fromEntries(invRes.rows.map(r => [r.resource_type_id, parseInt(r.amount, 10)]));
+        // 🔹 Cargar inventario de recursos usando el servicio
+        const currentResources = await require('../utils/resourcesService').getResources(entityId);
 
-    // 🔹 Obtener IDs de tipo de recurso
-        const typeRes = await client.query('SELECT id, name FROM resource_types');
-        const typeMap = Object.fromEntries(typeRes.rows.map(r => [r.name, r.id]));
-
-
-    // 🔹 Actualizar cantidades
+        // 🔹 Actualizar cantidades
         const newResources = {
-        wood: (inventory[typeMap.wood] || 0) + (accrued.wood || 0) + extraWood,
-        stone: (inventory[typeMap.stone] || 0) + (accrued.stone || 0) + extraStone,
-        food: Math.max(0, (inventory[typeMap.food] || 0) + (accrued.food || 0)),
+            wood: (currentResources.wood || 0) + (accrued.wood || 0) + extraWood,
+            stone: (currentResources.stone || 0) + (accrued.stone || 0) + extraStone,
+            food: Math.max(0, (currentResources.food || 0) + (accrued.food || 0)),
         };
-        console.log(newResources);
-    // 🔹 Guardar nuevas cantidades
-        for (const [name, qty] of Object.entries(newResources)) {
-        const resourceId = typeMap[name];
-        if (!resourceId) continue;
-        await client.query(
-            `
-            INSERT INTO resource_inventory (entity_id, resource_type_id, amount)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (entity_id, resource_type_id)
-            DO UPDATE SET amount = EXCLUDED.amount
-            `,
-            [entityId, resourceId, qty]
-        );
-        }
+
+        // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
+        await require('../utils/resourcesService').setResourcesWithClient(client, entityId, newResources);
 
         // Ajuste de población escalado por número de ticks pasados
         let newPopulation = popStats.current_population;

@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const { calculatePopulationStats, findAvailableCoordinates } = require('../utils/gameUtils');
 // ⭐️ Importación centralizada:
 const { authenticateToken } = require('../middleware/auth'); 
+const { getResources } = require('../utils/resourcesService');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const BASE_POPULATION = 10; 
@@ -129,17 +130,8 @@ router.post('/login', async (req, res) => {
 
         const entity = entityResult.rows[0];
 
-        // Obtener recursos
-        const resourcesResult = await pool.query(
-            `SELECT rt.id, rt.name, er.amount
-             FROM resource_inventory er
-             JOIN resource_types rt ON rt.id=er.resource_type_id
-             WHERE er.entity_id=$1`,
-            [entity.id]
-        );
-
-        const resources = {};
-        for (const r of resourcesResult.rows) resources[r.name] = parseInt(r.amount, 10);
+    // Obtener recursos (servicio centralizado)
+    const resources = await getResources(entity.id);
 
         const buildingCountResult = await pool.query(
             'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id=$1 GROUP BY type',
@@ -193,20 +185,8 @@ router.get('/me', authenticateToken, async (req, res) => {
 
     const entity = entityResult.rows[0];
 
-    // 2️⃣ Obtener inventario de recursos
-    const resourcesResult = await pool.query(
-      `SELECT rt.id AS resource_type_id, rt.name, ri.amount
-       FROM resource_inventory ri
-       JOIN resource_types rt ON ri.resource_type_id = rt.id
-       WHERE ri.entity_id = $1`,
-      [entity.id]
-    );
-
-    const resources = {};
-    for (const row of resourcesResult.rows) {
-      resources[row.name.toLowerCase()] = parseInt(row.amount, 10);
-      console.log(`Recurso: ${row.name}, cantidad: ${row.amount}`);
-    }
+    // 2️⃣ Obtener inventario de recursos (servicio centralizado)
+    const resources = await getResources(entity.id);
 
     // 3️⃣ Obtener edificios asociados a la entidad (si existe tabla buildings)
     let buildings = [];

@@ -46,6 +46,33 @@ async function setResources(entityId, resources) {
   }
 }
 
+// setResources using existing client (assumes caller manages transaction)
+async function setResourcesWithClient(client, entityId, resources) {
+  if (typeof resources.wood === 'number') {
+    await client.query(
+      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='wood')`,
+      [resources.wood, entityId]
+    );
+  }
+  if (typeof resources.stone === 'number') {
+    await client.query(
+      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='stone')`,
+      [resources.stone, entityId]
+    );
+  }
+  if (typeof resources.food === 'number') {
+    await client.query(
+      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='food')`,
+      [resources.food, entityId]
+    );
+  }
+  const updated = await client.query(
+    `SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
+    [entityId]
+  );
+  return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+}
+
 // Consume (subtract) costs atomically. costs: { wood, stone, food }
 // Returns updated resources or throws Error('Recursos insuficientes')
 async function consumeResources(entityId, costs) {
@@ -162,5 +189,6 @@ module.exports = {
   getResources,
   setResources,
   consumeResources,
-  consumeResourcesWithClient
+  consumeResourcesWithClient,
+  setResourcesWithClient
 };
