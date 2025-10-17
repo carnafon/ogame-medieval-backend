@@ -29,6 +29,13 @@ const BUILDING_COSTS = {
   artificiero: { wood: 45, stone: 30, food: 15 },
   herreria_real: { wood: 60, stone: 50, food: 15 },
   lineria: { wood: 30, stone: 20, food: 8 },
+  // Strategic buildings
+  tintoreria_dorada: { wood: 60, stone: 40, food: 10 },
+  herreria_mitica: { wood: 80, stone: 120, food: 20 },
+  salinas: { wood: 30, stone: 20, food: 50 },
+  mina_azufre: { wood: 50, stone: 70, food: 10 },
+  mina_gemas: { wood: 90, stone: 150, food: 20 },
+  telar_real: { wood: 70, stone: 30, food: 15 },
 };
 
 module.exports = { BUILDING_COSTS };

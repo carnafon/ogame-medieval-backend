@@ -48,6 +48,14 @@ PRODUCTION_RATES['artificiero'] = { explosive_compound: 1 };
 PRODUCTION_RATES['herreria_real'] = { damascus_steel: 1 };
 PRODUCTION_RATES['lineria'] = { linen: 1 };
 
+// Strategic building production (produce fragile/processed items per tick)
+PRODUCTION_RATES['tintoreria_dorada'] = { golden_dye: 1 };
+PRODUCTION_RATES['herreria_mitica'] = { rare_iron: 1 };
+PRODUCTION_RATES['salinas'] = { sea_salt: 1 };
+PRODUCTION_RATES['mina_azufre'] = { sulfur: 1 };
+PRODUCTION_RATES['mina_gemas'] = { gems: 1 };
+PRODUCTION_RATES['telar_real'] = { royal_silk: 1 };
+
 // Añadimos la Sastrería como edificio procesador que produce silk_cloth
 PRODUCTION_RATES['sastreria'] = { silk_cloth: 1 };
 
@@ -73,6 +81,13 @@ const PROCESSING_RECIPES = {
     , explosive_compound: { coal: 5, baked_brick: 2 }
     , damascus_steel: { stone: 6, iron_ingot: 2 }
     , linen: { leather: 4, silk_cloth: 2 }
+        // Strategic processing recipes
+        , golden_dye: { wool: 5, silk_cloth: 2, royal_dye: 1 }
+        , rare_iron: { stone: 10, iron_ingot: 2, damascus_steel: 1 }
+        , sea_salt: { food: 8, beer: 2, preservation_elixir: 1 }
+        , sulfur: { coal: 6, explosive_compound: 1, tools: 1 }
+        , gems: { copper: 5, explosive_compound: 1, refined_clay: 2 }
+        , royal_silk: { honey: 4, salted: 2, linen: 3 }
 };
 
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)
