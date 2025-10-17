@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db'); 
+const { consumeResources } = require('../utils/resourcesService');
 const { calculatePopulationStats, calculateProduction, calculateProductionForDuration } = require('../utils/gameUtils'); // Importamos funciones de utilidad
 const { authenticateToken } = require('../middleware/auth'); // Importamos el middleware centralizado
 
@@ -36,66 +37,33 @@ router.post('/build', async (req, res) => {
         return res.status(400).json({ message: 'Tipo de edificio no válido.' });
     }
 
-    const client = await pool.connect(); 
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-    try {
-        await client.query('BEGIN'); 
+        const buildingResult = await client.query(
+            `SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1`,
+            [entity.id, buildingType]
+        );
+        const currentLevel = buildingResult.rows.length > 0 ? buildingResult.rows[0].level : 0;
+        const factor = 1.7;
+        const cost = {
+            wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
+            stone: Math.ceil(costBase.stone * Math.pow(currentLevel + 1, factor)),
+            food: Math.ceil(costBase.food * Math.pow(currentLevel + 1, factor)),
+        };
 
-        // 1. Obtener recursos, población y timestamp del último update
-     
-                            const currentResources = await client.query(
-                        `SELECT rt.name AS type, ri.amount
-                        FROM resource_inventory ri
-                        JOIN resource_types rt ON ri.resource_type_id = rt.id
-                        WHERE ri.entity_id = $1
-                        FOR UPDATE`,
-                        [entity.id]
-                    );
-
-                    const resources = Object.fromEntries(
-                        currentResources.rows.map(r => [r.type.toLowerCase(), parseInt(r.amount, 10)])
-                    );
-                 
-
-
-                     // 2️⃣ Obtener nivel actual del edificio
-                const buildingResult = await client.query(
-                       `SELECT level FROM buildings
-                   WHERE entity_id = $1 AND type = $2 LIMIT 1`,
-                  [entity.id, buildingType]
-             );
-
-                      const currentLevel = buildingResult.rows.length > 0 ? buildingResult.rows[0].level : 0;
-                    const factor = 1.7; // Ajusta para subir más rápido o lento
-                    const cost = {
-                    wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
-                      stone: Math.ceil(costBase.stone * Math.pow(currentLevel + 1, factor)),
-                      food: Math.ceil(costBase.food * Math.pow(currentLevel + 1, factor)),
-                     };
-
-
-                    // 3 Verificar si tiene recursos suficientes
-                    if (
-                        (resources.wood || 0) < cost.wood ||
-                        (resources.stone || 0) < cost.stone ||
-                        (resources.food || 0) < cost.food
-                    ) {
-                        await client.query('ROLLBACK');
-                        return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
-                    }
-
-        // 4 Descontar recursos
-                await client.query(
-            `UPDATE resource_inventory
-            SET amount = amount - CASE
-                WHEN resource_type_id = (SELECT id FROM resource_types WHERE name = 'wood') THEN $1
-                WHEN resource_type_id = (SELECT id FROM resource_types WHERE name = 'stone') THEN $2
-                WHEN resource_type_id = (SELECT id FROM resource_types WHERE name = 'food') THEN $3
-                ELSE 0
-                END
-            WHERE entity_id = $4`,
-            [cost.wood, cost.stone, cost.food, entity.id]
-            );
+        // Consume resources within this same transaction
+        try {
+            await require('../utils/resourcesService').consumeResourcesWithClient(client, entity.id, cost);
+        } catch (err) {
+            if (err && err.code === 'INSUFFICIENT') {
+                await client.query('ROLLBACK');
+                client.release();
+                return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
+            }
+            throw err;
+        }
 
         // 5️⃣ Incrementar nivel o crear edificio
         if (currentLevel > 0) {

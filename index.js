@@ -84,6 +84,10 @@ app.use('/api', authenticateToken, gameRoutes);
 const entitiesRoutes = require('./routes/entitiesRoutes');
 app.use('/api/entities', entitiesRoutes);
 
+// rutas de recursos (GET/POST)
+const resourcesRoutes = require('./routes/resourcesRoutes');
+app.use('/api/resources', resourcesRoutes);
+
 
 
 
