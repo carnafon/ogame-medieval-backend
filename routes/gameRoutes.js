@@ -55,10 +55,31 @@ router.post('/build', async (req, res) => {
 
         // Consume resources within this same transaction
         try {
+            // Debug: log current resources before attempting to consume
+            try {
+                const currentRes = await client.query(
+                    `SELECT rt.name, ri.amount
+                     FROM resource_inventory ri
+                     JOIN resource_types rt ON ri.resource_type_id = rt.id
+                     WHERE ri.entity_id = $1`,
+                    [entity.id]
+                );
+                const curObj = Object.fromEntries(currentRes.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+                console.log(`Current resources for entity ${entity.id}:`, curObj);
+            } catch (logErr) {
+                console.warn('Failed to read current resources for logging:', logErr.message);
+            }
             await require('../utils/resourcesService').consumeResourcesWithClient(client, entity.id, cost);
         } catch (err) {
             if (err && err.code === 'INSUFFICIENT') {
                 await client.query('ROLLBACK');
+                // Log detailed info for debugging
+                console.warn(`INSUFFICIENT resources for entity ${entity.id}:`, {
+                    resource: err.resource || null,
+                    need: err.need || null,
+                    have: err.have || null,
+                    message: err.message
+                });
                 // Propagate a structured error with details from the resourcesService
                 return res.status(400).json({
                     message: err.message || 'Recursos insuficientes para construir.',
