@@ -111,14 +111,14 @@ router.post('/register', async (req, res) => {
         console.log(`Nuevo usuario registrado: ${username} (ID: ${userId}) en las coordenadas (${x}, ${y})`);
         const token = createToken(userId, username);
 
-        res.status(201).json({
-            message: 'Registro exitoso.',
-            user: { id: userId, username },
-            entity: newEntity.rows[0],
-            token,
-            buildings: [],
-            population: calculatePopulationStats([], BASE_POPULATION)
-        });
+    res.status(201).json({
+      message: 'Registro exitoso.',
+      user: { id: userId, username },
+      entity: newEntity,
+      token,
+      buildings: [],
+      population: calculatePopulationStats([], BASE_POPULATION)
+    });
 
     } catch (err) {
         if (err.code === '23505') return res.status(409).json({ message: 'Usuario ya existe.' });
