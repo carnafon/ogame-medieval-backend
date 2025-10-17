@@ -75,4 +75,17 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/resource-types
+// Devuelve los tipos de recursos definidos en la base de datos
+router.get('/types', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name FROM resource_types ORDER BY id');
+    res.json({ resourceTypes: result.rows.map(r => ({ id: r.id, name: r.name })) });
+  } catch (err) {
+    console.error('Error al obtener tipos de recursos:', err.message);
+    res.status(500).json({ message: 'Error al obtener tipos de recursos.', error: err.message });
+  }
+});
+
 module.exports = router;
+
