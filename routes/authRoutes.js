@@ -97,6 +97,26 @@ router.post('/register', async (req, res) => {
       );
     }
 
+    // 5️⃣ Crear ciudades IA para las demás facciones
+    try {
+      const factionsRes = await pool.query('SELECT id, name FROM factions WHERE id <> $1', [factionId]);
+      const aiCityService = require('../utils/ai_city_service');
+      for (const f of factionsRes.rows) {
+        // Find available coordinates for this faction
+        const { x: ax, y: ay } = await findAvailableCoordinates(pool, f.id);
+        // Create paired AI city with defaults (service will set population=100 and resources=1000)
+        await aiCityService.createPairedCity(pool, {
+          name: `IA ${f.name}`,
+          faction_id: f.id,
+          type: 'cityIA',
+          x_coord: ax,
+          y_coord: ay
+        });
+      }
+    } catch (aiErr) {
+      console.warn('Error creando ciudades IA al registrar usuario:', aiErr.message);
+    }
+
         console.log(`Nuevo usuario registrado: ${username} (ID: ${userId}) en las coordenadas (${x}, ${y})`);
         const token = createToken(userId, username);
 

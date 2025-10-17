@@ -61,7 +61,23 @@ async function createPairedCity(clientOrPool, cityData) {
     await client.query('UPDATE ai_cities SET entity_id = $1 WHERE id = $2', [entity.id, ai.id]);
 
     // 3. store runtime inside entities.ai_runtime
-    const runtime = cityData.runtime || { buildings: {}, resources: {}, population: cityData.population || 0, pop_consumed: 0, current_construction: null };
+    // Build runtime defaults: population default 100, resources default 1000 each if not provided
+    let runtime = cityData.runtime || {};
+    runtime.buildings = runtime.buildings || {};
+    runtime.pop_consumed = runtime.pop_consumed || 0;
+    runtime.current_construction = runtime.current_construction || null;
+    runtime.population = (typeof runtime.population === 'number') ? runtime.population : (cityData.population || 100);
+
+    // If resources not provided or empty, load all resource types and set each to 1000
+    if (!runtime.resources || Object.keys(runtime.resources).length === 0) {
+        const rtRes = await client.query('SELECT name FROM resource_types');
+        const resMap = {};
+        rtRes.rows.forEach(r => { resMap[(r.name || '').toLowerCase()] = 1000; });
+        runtime.resources = resMap;
+    }
+
+    // Ensure last_resource_update exists
+    if (!runtime.last_resource_update) runtime.last_resource_update = new Date().toISOString();
     await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [runtime, entity.id]);
 
     return { entity, ai_city: ai };

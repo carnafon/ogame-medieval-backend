@@ -9,6 +9,8 @@ const { calculateUpgradeRequirements, BUILDING_CONFIG } = require('../utils/ai_b
 const aiCityService = require('../utils/ai_city_service');
 const { getBuildings, getBuildingLevel } = require('../utils/buildingsService');
 const pool = require('../db');
+const { calculateProductionForDuration, TICK_SECONDS } = require('../utils/gameUtils');
+const resourcesService = require('../utils/resourcesService');
 
 /**
  * Procesa la lógica económica (construcción, producción, comercio) para todas las ciudades IA.
@@ -34,6 +36,29 @@ async function runEconomicUpdate(pool) {
                 if (eRowRes.rows.length === 0) { await client.query('COMMIT'); client.release(); continue; }
                 const entityRow = eRowRes.rows[0];
                 const runtime = entityRow.ai_runtime || {};
+
+                // Production: compute seconds since last_resource_update and produce resources
+                try {
+                    const lastUpdate = runtime.last_resource_update ? new Date(runtime.last_resource_update) : new Date();
+                    const secondsElapsed = Math.max(0, Math.floor((now - lastUpdate) / 1000));
+                    if (secondsElapsed >= TICK_SECONDS) {
+                        // load buildings for entity
+                        const buildings = await getBuildings(entityRow.id);
+                        const popStats = { current_population: runtime.population || 0 };
+                        const produced = calculateProductionForDuration(buildings, popStats, secondsElapsed);
+                        // Merge produced into runtime.resources
+                        const newResources = Object.assign({}, runtime.resources || {});
+                        Object.keys(produced).forEach(k => { newResources[k] = (newResources[k] || 0) + produced[k]; });
+                        // Persist to resource_inventory via generic setter using client
+                        await resourcesService.setResourcesWithClientGeneric(client, entityRow.id, newResources);
+                        // Update runtime resources and last_resource_update
+                        runtime.resources = newResources;
+                        runtime.last_resource_update = now.toISOString();
+                        await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [runtime, entityRow.id]);
+                    }
+                } catch (prodErr) {
+                    console.warn('[AI Engine] Error processing production for entity', entityRow.id, prodErr.message);
+                }
 
                 if (runtime.current_construction && new Date(runtime.current_construction.finish_time) <= now) {
                     await completeConstruction(client, ai, entityRow);
