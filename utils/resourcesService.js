@@ -73,6 +73,29 @@ async function setResourcesWithClient(client, entityId, resources) {
   return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
 }
 
+// Generic setter that accepts an object with arbitrary resource keys and updates them within the provided client transaction.
+// resources: { wood: 123, copper: 5, food: 10, ... }
+async function setResourcesWithClientGeneric(client, entityId, resources) {
+  // Load mapping resource name -> id once
+  const resTypes = await client.query(`SELECT id, name FROM resource_types`);
+  const nameToId = Object.fromEntries(resTypes.rows.map(r => [r.name.toLowerCase(), r.id]));
+
+  for (const [key, value] of Object.entries(resources)) {
+    if (!Object.prototype.hasOwnProperty.call(nameToId, key)) continue; // ignore unknown resource keys
+    // Upsert pattern: update existing row
+    await client.query(
+      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = $3`,
+      [value, entityId, nameToId[key]]
+    );
+  }
+
+  const updated = await client.query(
+    `SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
+    [entityId]
+  );
+  return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+}
+
 // Consume (subtract) costs atomically. costs: { wood, stone, food }
 // Returns updated resources or throws Error('Recursos insuficientes')
 async function consumeResources(entityId, costs) {

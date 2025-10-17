@@ -76,18 +76,27 @@ async function processEntity(entityId, options) {
         const extraWood = ticks * Math.floor(woodPerTick);
         const extraStone= ticks * Math.floor(stonePerTick);
 
-        // 🔹 Cargar inventario de recursos usando el servicio
-        const currentResources = await require('../utils/resourcesService').getResources(entityId);
+            // 🔹 Cargar inventario de recursos usando el servicio
+            const currentResources = await require('../utils/resourcesService').getResources(entityId);
 
-        // 🔹 Actualizar cantidades
-        const newResources = {
-            wood: (currentResources.wood || 0) + (accrued.wood || 0) + extraWood,
-            stone: (currentResources.stone || 0) + (accrued.stone || 0) + extraStone,
-            food: Math.max(0, (currentResources.food || 0) + (accrued.food || 0)),
-        };
+            // 🔹 Actualizar cantidades para todas las claves producidas
+            const produced = accrued || {};
+            const newResources = { ...currentResources };
+            Object.keys(produced).forEach(k => {
+                const add = produced[k] || 0;
+                newResources[k] = (newResources[k] || 0) + add;
+            });
+            // aplicar las sumas fijas por tick también
+            newResources.wood = (newResources.wood || 0) + extraWood;
+            newResources.stone = (newResources.stone || 0) + extraStone;
 
-        // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
-        await require('../utils/resourcesService').setResourcesWithClient(client, entityId, newResources);
+            // Asegurar no negativos para recursos sensibles (ej: food)
+            if (typeof newResources.food === 'number') newResources.food = Math.max(0, newResources.food);
+
+            // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
+            // Reutilizamos setResourcesWithClient (que actualmente solo actualiza wood/stone/food)
+            // Para soportar recursos dinámicos, llamamos a una nueva función genérica que actualice cualquier recurso.
+            await require('../utils/resourcesService').setResourcesWithClientGeneric(client, entityId, newResources);
 
     // Ajuste de población escalado por número de ticks pasados
     let newPopulation = popStats.current_population;

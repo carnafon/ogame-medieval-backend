@@ -12,11 +12,20 @@ const COORD_RADIUS = 25; // Radio de la zona de influencia de la facción (ej: 2
 
 
 // Tasa de producción por edificio (por intervalo de 10 segundos)
+// Cada entrada describe la producción neta por tick para recursos según claves en la DB (ej: wood, stone, food, water, clay, leather, coal, copper, wool, honey)
 const PRODUCTION_RATES = {
-    'house': { food: 0, wood: 0, stone: 0 }, 
-    'sawmill': { wood: 5, stone: 0, food: -1 },
-    'quarry':{stone:8, wood:0, food:-2}, 
-    'farm': { food: 10, wood: -1, stone: 0 } 
+    'house': { },
+    'sawmill': { wood: 5, food: -1 },
+    'quarry': { stone: 8, food: -2 },
+    'farm': { food: 10, wood: -1 },
+    // Nuevos edificios para recursos comunes
+    'well': { water: 5 },
+    'clay_pit': { clay: 4 },
+    'tannery': { leather: 3 },
+    'coal_mine': { coal: 3 },
+    'copper_mine': { copper: 3 },
+    'sheepfold': { wool: 2, food: -1 },
+    'apiary': { honey: 1 }
 };
 
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)
@@ -127,35 +136,29 @@ const calculatePopulationStats = (userBuildings, currentPopFromDB) => {
  * @returns {{wood: number, stone: number, food: number}}
  */
 const calculateProduction = (userBuildings, populationStats) => {
-    let production = { wood: 0, stone: 0, food: 0 };
-    
-    if (!Array.isArray(userBuildings)) {
-        return production;
-    }
+    // Producción por recurso (dinámico según claves en PRODUCTION_RATES)
+    const production = {};
 
-    // 1. Calcular producción/consumo fijo de edificios
-    // Ahora usamos `building.level` como medida para la contribución del edificio.
-    // Si `level` no está presente, hacemos fallback a `count` para compatibilidad con datos antiguos.
+    if (!Array.isArray(userBuildings)) return production;
+
     userBuildings.forEach(building => {
         const rate = PRODUCTION_RATES[building.type];
         if (!rate) return;
 
-        // Preferir `level` si existe, si no usar `count`, si no 0.
         const qty = (typeof building.level === 'number')
             ? building.level
             : (typeof building.count === 'number' ? building.count : 0);
 
         if (qty <= 0) return;
 
-        production.wood += (rate.wood || 0) * qty;
-        production.stone += (rate.stone || 0) * qty;
-        production.food += (rate.food || 0) * qty;
+        Object.keys(rate).forEach(resourceKey => {
+            production[resourceKey] = (production[resourceKey] || 0) + (rate[resourceKey] || 0) * qty;
+        });
     });
-    
-    // 2. Calcular Consumo de Comida basado en la Población actual
-    const foodConsumption = populationStats.current_population * -FOOD_CONSUMPTION_PER_CITIZEN;
-    production.food += foodConsumption;
-    
+
+    // Consumo de comida por población
+    const foodConsumption = (populationStats.current_population || 0) * -FOOD_CONSUMPTION_PER_CITIZEN;
+    production.food = (production.food || 0) + foodConsumption;
 
     return production;
 };
@@ -177,14 +180,13 @@ const calculateProductionForDuration = (userBuildings, populationStats, seconds)
     const perTick = calculateProduction(userBuildings, populationStats);
     const multiplier = seconds / TICK_SECONDS;
 
-    const scaled = {
-        wood: perTick.wood * multiplier,
-        stone: perTick.stone * multiplier,
-        food: perTick.food * multiplier
-    };
+    const scaled = {};
+    Object.keys(perTick).forEach(k => {
+        scaled[k] = perTick[k] * multiplier;
+    });
 
-    const final = { wood: 0, stone: 0, food: 0 };
-    Object.keys(final).forEach(k => {
+    const final = {};
+    Object.keys(scaled).forEach(k => {
         const v = scaled[k];
         final[k] = v >= 0 ? Math.floor(v) : Math.ceil(v);
     });
