@@ -96,8 +96,11 @@ async function consumeResources(entityId, costs) {
       const need = costs[key] || 0;
       if ((current[key] || 0) < need) {
         await client.query('ROLLBACK');
-        const err = new Error('Recursos insuficientes para construir.');
+        const err = new Error(`Recursos insuficientes: ${key} (necesita ${need}, tiene ${current[key] || 0})`);
         err.code = 'INSUFFICIENT';
+        err.resource = key;
+        err.need = need;
+        err.have = current[key] || 0;
         throw err;
       }
     }
@@ -153,8 +156,11 @@ async function consumeResourcesWithClient(client, entityId, costs) {
   for (const key of ['wood', 'stone', 'food']) {
     const need = costs[key] || 0;
     if ((current[key] || 0) < need) {
-      const err = new Error('Recursos insuficientes para construir.');
+      const err = new Error(`Recursos insuficientes: ${key} (necesita ${need}, tiene ${current[key] || 0})`);
       err.code = 'INSUFFICIENT';
+      err.resource = key;
+      err.need = need;
+      err.have = current[key] || 0;
       throw err;
     }
   }
