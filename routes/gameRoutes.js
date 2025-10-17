@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db'); 
 const { consumeResources } = require('../utils/resourcesService');
+const { getBuildings, getBuildingLevel } = require('../utils/buildingsService');
 const { calculatePopulationStats, calculateProduction, calculateProductionForDuration } = require('../utils/gameUtils'); // Importamos funciones de utilidad
 const { authenticateToken } = require('../middleware/auth'); // Importamos el middleware centralizado
 
@@ -41,11 +42,7 @@ router.post('/build', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        const buildingResult = await client.query(
-            `SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1`,
-            [entity.id, buildingType]
-        );
-        const currentLevel = buildingResult.rows.length > 0 ? buildingResult.rows[0].level : 0;
+        const currentLevel = await getBuildingLevel(entity.id, buildingType);
         const factor = 1.7;
         const cost = {
             wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
@@ -108,10 +105,7 @@ router.post('/build', async (req, res) => {
         }
 
         // 5️⃣ Obtener edificios actualizados
-        const updatedBuildings = await client.query(
-            'SELECT type, MAX(level) AS level FROM buildings WHERE entity_id = $1 GROUP BY type',
-            [entity.id]
-        );
+        const updatedBuildings = await getBuildings(entity.id);
 
 
         // 6️⃣ Obtener entidad actualizada (población, recursos)

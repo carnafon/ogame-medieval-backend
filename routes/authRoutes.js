@@ -7,6 +7,7 @@ const { calculatePopulationStats, findAvailableCoordinates } = require('../utils
 // ⭐️ Importación centralizada:
 const { authenticateToken } = require('../middleware/auth'); 
 const { getResources } = require('../utils/resourcesService');
+const { getBuildings } = require('../utils/buildingsService');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const BASE_POPULATION = 10; 
@@ -133,12 +134,7 @@ router.post('/login', async (req, res) => {
     // Obtener recursos (servicio centralizado)
     const resources = await getResources(entity.id);
 
-        const buildingCountResult = await pool.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id=$1 GROUP BY type',
-            [entity.id]
-        );
-
-        const buildingsList = buildingCountResult.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
+    const buildingsList = await getBuildings(entity.id);
 
         const populationStats = calculatePopulationStats(buildingsList, parseInt(entity.current_population, 10));
 
@@ -191,17 +187,12 @@ router.get('/me', authenticateToken, async (req, res) => {
     // 3️⃣ Obtener edificios asociados a la entidad (si existe tabla buildings)
     let buildings = [];
     try {
-      const buildingsResult = await pool.query(
-        `SELECT type AS type, COALESCE(MAX(level), 0) AS level
-         FROM buildings
-         WHERE entity_id = $1
-         GROUP BY type`,
-        [entity.id]
-      );
-      buildings = buildingsResult.rows.map(b => ({
+      buildings = await getBuildings(entity.id);
+      buildings = buildings.map(b => ({
         type: b.type,
-        level: parseInt(b.level, 10),
-        nextLevelCost: calculateNextLevelCost({ type: b.type, level })
+        level: b.level,
+        count: b.count,
+        nextLevelCost: calculateNextLevelCost({ type: b.type, level: b.level })
       }));
     } catch (err) {
       console.warn('⚠️ Tabla buildings no encontrada o sin datos:', err.message);

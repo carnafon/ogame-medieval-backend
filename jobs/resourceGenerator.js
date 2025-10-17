@@ -1,5 +1,6 @@
 const pool = require('../db');
 const { calculatePopulationStats, calculateProduction, calculateProductionForDuration, TICK_SECONDS, RESOURCE_GENERATOR_WOOD_PER_TICK, RESOURCE_GENERATOR_STONE_PER_TICK } = require('../utils/gameUtils');
+const { getBuildings } = require('../utils/buildingsService');
 
 // Parámetros configurables
 const POPULATION_CHANGE_RATE = 1; // cambio de población por tick
@@ -47,11 +48,7 @@ async function processEntity(entityId, options) {
 
 
         // Obtener edificios del usuario
-        const bRes = await client.query(
-            'SELECT type, COUNT(*) as count FROM buildings WHERE entity_id  = $1 GROUP BY type',
-            [entityId]
-        );
-        const buildings = bRes.rows.map(r => ({ type: r.type, count: parseInt(r.count, 10) }));
+        const buildings = await getBuildings(entityId);
 
         // Calcular población y producción acumulada
         const popStats = calculatePopulationStats(buildings, parseInt(entity.current_population, 10));
