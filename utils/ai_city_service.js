@@ -84,6 +84,25 @@ async function createPairedCity(clientOrPool, cityData) {
         console.warn('Failed to initialize AI city resources in resource_inventory:', rsErr.message);
     }
 
+    // Additional defensive upsert: ensure a resource_inventory row exists for every resource type.
+    // This protects against cases where the shared entity creator didn't insert rows (e.g. schema mismatch).
+    try {
+        const rt = await client.query('SELECT id, name FROM resource_types');
+        for (const r of rt.rows) {
+            const name = (r.name || '').toLowerCase();
+            const amount = typeof initialResources[name] === 'number' ? initialResources[name] : 0;
+            // Use upsert to create or set the amount
+            await client.query(
+                `INSERT INTO resource_inventory (entity_id, resource_type_id, amount)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (entity_id, resource_type_id) DO UPDATE SET amount = EXCLUDED.amount`,
+                [entity.id, r.id, amount]
+            );
+        }
+    } catch (upErr) {
+        console.warn('Failed to upsert resource_inventory defensive rows for AI city:', upErr.message);
+    }
+
     // Do NOT store runtime in entities.ai_runtime for AI cities.
     // Resource amounts are already initialized in resource_inventory by createEntityWithResources.
     // Buildings are persisted in the `buildings` table when the AI builds.
