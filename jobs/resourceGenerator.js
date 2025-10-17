@@ -24,11 +24,15 @@ async function processEntity(entityId, options) {
         await client.query('BEGIN');
 
 
-        // 🔹 Obtener datos base de la entidad (lock para evitar race conditions)
-    const entityRes = await client.query(
-      'SELECT id, type, current_population, last_resource_update FROM entities WHERE id = $1 FOR UPDATE',
-      [entityId]
-    );
+            // 🔹 Obtener datos base de la entidad (lock para evitar race conditions)
+            const entityRes = await client.query(
+                `SELECT e.id, e.type, e.current_population, e.last_resource_update, e.faction_id, e.x_coord, e.y_coord, e.max_population, f.name AS faction_name
+                 FROM entities e
+                 LEFT JOIN factions f ON f.id = e.faction_id
+                 WHERE e.id = $1
+                 FOR UPDATE`,
+                [entityId]
+            );
 
     if (entityRes.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -50,9 +54,10 @@ async function processEntity(entityId, options) {
         // Obtener edificios del usuario
         const buildings = await getBuildings(entityId);
 
-        // Calcular población y producción acumulada
-        const popStats = calculatePopulationStats(buildings, parseInt(entity.current_population, 10));
-        const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
+    // Calcular población y producción acumulada
+    const popStats = calculatePopulationStats(buildings, parseInt(entity.current_population, 10));
+    const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
+    const maxPopulation = popStats.max_population || entity.max_population || 0;
 
         // Aplicar sumas fijas por tick configurables
         const woodPerTick = options && options.woodPerTick ? parseFloat(options.woodPerTick) : 0;
@@ -75,9 +80,8 @@ async function processEntity(entityId, options) {
         // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
         await require('../utils/resourcesService').setResourcesWithClient(client, entityId, newResources);
 
-        // Ajuste de población escalado por número de ticks pasados
-        let newPopulation = popStats.current_population;
-        const maxPopulation = popStats.max_population;
+    // Ajuste de población escalado por número de ticks pasados
+    let newPopulation = popStats.current_population;
         if (ticks > 0) {
             const perTickProduction = calculateProduction(buildings, popStats);
             if ((perTickProduction.food || 0) >= 0) {
@@ -98,9 +102,30 @@ async function processEntity(entityId, options) {
     );
 
         await client.query('COMMIT');
+
+        // Return full response similar to previous /generate-resources API
+        return {
+            message: 'Recursos actualizados correctamente.',
+            entity: {
+                id: entity.id,
+                faction_id: entity.faction_id || null,
+                faction_name: entity.faction_name || '',
+                x_coord: entity.x_coord || 0,
+                y_coord: entity.y_coord || 0,
+                current_population: newPopulation,
+                max_population: maxPopulation,
+                resources: newResources
+            },
+            population: {
+                current_population: newPopulation,
+                max_population: maxPopulation,
+                available_population: maxPopulation - newPopulation
+            }
+        };
     } catch (err) {
         try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
         console.error('Error processing user in resourceGenerator:', err.message);
+        throw err;
     } finally {
         client.release();
     }
@@ -117,9 +142,10 @@ async function runResourceGeneratorJob() {
         const res = await pool.query('SELECT id FROM entities');
         // Usamos Promise.all para procesar los usuarios en paralelo y terminar más rápido.
         // Si tienes miles de usuarios, considera limitar la concurrencia (ej: a 100).
-        await Promise.all(res.rows.map(row => processEntity(row.id, currentOptions)));
+        const results = await Promise.all(res.rows.map(row => processEntity(row.id, currentOptions).catch(err => ({ error: err.message, entityId: row.id }))));
 
         console.log("-> Generación de recursos completada.");
+        return results;
     } catch (err) {
         console.error('Error running resource generator job:', err.message);
     }
@@ -128,3 +154,6 @@ async function runResourceGeneratorJob() {
 module.exports = {
     runResourceGeneratorJob
 };
+
+// Also export single-entity processor for API usage
+module.exports.processEntity = processEntity;

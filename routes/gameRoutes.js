@@ -163,91 +163,20 @@ router.post('/build', async (req, res) => {
 
 router.post('/generate-resources', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-
-
-    const client = await pool.connect();
     try {
-        await client.query('BEGIN');
-        // Obtener entidad del usuario
-        const entityRes = await client.query(
-             'SELECT id, current_population, max_population, last_resource_update FROM entities WHERE user_id = $1 LIMIT 1',
-            [userId]
-        );
+        // Find user's entity id
+        const er = await pool.query('SELECT id FROM entities WHERE user_id = $1 LIMIT 1', [userId]);
+        if (er.rows.length === 0) return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
+        const entityId = er.rows[0].id;
 
+        // Call the central processor for a single entity
+        const rg = require('../jobs/resourceGenerator');
+        const result = await rg.processEntity(entityId, null);
 
-         if (entityRes.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
-         }
-
-    const entity = entityRes.rows[0];
-    const entityId = entity.id;
-
-
-
-         // Obtener recursos actuales (servicio)
-        const resources = await require('../utils/resourcesService').getResources(entityId);
-
-        // --- Calcula la producción (ejemplo) ---
-        const now = new Date();
-        const lastUpdate = entity.last_resource_update ? new Date(entity.last_resource_update) : now;
-        const secondsElapsed = Math.floor((now - lastUpdate) / 1000);
-
-        // Aquí deberías tener tu función de cálculo de recursos: calcula accrued
-        const accrued = {
-            wood: 1 * secondsElapsed,   // ejemplo: +1 madera por segundo
-            stone: 1 * secondsElapsed,  // ejemplo
-            food: 1 * secondsElapsed
-        };
-
-        // Actualizar recursos acumulados
-        const newResources = {
-            wood: (resources.wood || 0) + accrued.wood,
-            stone: (resources.stone || 0) + accrued.stone,
-            food: Math.max(0, (resources.food || 0) + accrued.food),
-        };
-
-    // Actualizar tabla resource_inventory usando el servicio centralizado (misma transacción)
-    await require('../utils/resourcesService').setResourcesWithClient(client, entityId, newResources);
-
-        // Actualizar población y timestamp
-        let newPopulation = entity.current_population; // ejemplo
-        await client.query(
-            `UPDATE entities
-             SET current_population = $1, last_resource_update = $2
-             WHERE id = $3`,
-            [newPopulation, now.toISOString(), entityId]
-        );
-
-        await client.query('COMMIT');
-
-        // Enviar la entidad completa con recursos al frontend
-       res.status(200).json({
-            message: 'Recursos actualizados correctamente.',
-            entity: {
-                id: entity.id,
-                faction_id: entity.faction_id || null,
-                faction_name: entity.faction_name || '',
-                x_coord: entity.x_coord || 0,
-                y_coord: entity.y_coord || 0,
-                current_population: newPopulation,
-                max_population: entity.max_population || 0,
-                resources: newResources
-            },
-            population: {
-                current_population: newPopulation,
-                max_population: entity.max_population || 0,
-                available_population: (entity.max_population || 0) - newPopulation
-            }
-        });
-
-
+        return res.status(200).json({ message: 'Recursos actualizados correctamente.', entity: { id: entityId, resources: result.resources }, population: result.population });
     } catch (err) {
-        await client.query('ROLLBACK');
         console.error('Error en generate-resources:', err.message);
-        res.status(500).json({ message: 'Error al generar recursos.', error: err.message });
-    } finally {
-        client.release();
+        return res.status(500).json({ message: 'Error al generar recursos.', error: err.message });
     }
 });
 
