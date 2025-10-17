@@ -139,37 +139,38 @@ async function runEconomicUpdate(pool) {
  * This function will lock the city row and perform the same update logic as the batch runner
  */
 async function runEconomicUpdateForCity(pool, cityId) {
-    // Find map_entities entries for this ai city and run update on each
-    const mapsRes = await pool.query('SELECT id FROM map_entities WHERE ai_city_id = $1', [cityId]);
-    if (mapsRes.rows.length === 0) throw new Error(`No map entries for AI City ${cityId}`);
+    // Find the linked entity for this AI city and run the update on that entity.
+    const entRes = await pool.query('SELECT entity_id FROM ai_cities WHERE id = $1', [cityId]);
+    if (entRes.rows.length === 0 || !entRes.rows[0].entity_id) throw new Error(`No entity linked to AI City ${cityId}`);
+    const entityId = entRes.rows[0].entity_id;
     const now = new Date();
-    for (const m of mapsRes.rows) {
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-            const mapRowRes = await client.query('SELECT * FROM map_entities WHERE id = $1 FOR UPDATE', [m.id]);
-            if (mapRowRes.rows.length === 0) { await client.query('COMMIT'); client.release(); continue; }
-            const mapRow = mapRowRes.rows[0];
-            const runtime = mapRow.runtime || {};
 
-            if (runtime.current_construction && new Date(runtime.current_construction.finish_time) <= now) {
-                await completeConstruction(client, { id: cityId }, mapRow);
-            } else {
-                // re-read runtime and decide
-                const fresh = await client.query('SELECT runtime FROM map_entities WHERE id = $1', [mapRow.id]);
-                const currentRuntime = (fresh.rows[0] && fresh.rows[0].runtime) || runtime;
-                if (!currentRuntime.current_construction) {
-                    await decideNewConstruction(client, { id: cityId }, mapRow);
-                }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const entityRowRes = await client.query('SELECT * FROM entities WHERE id = $1 FOR UPDATE', [entityId]);
+        if (entityRowRes.rows.length === 0) { await client.query('COMMIT'); return true; }
+        const entityRow = entityRowRes.rows[0];
+        const runtime = entityRow.ai_runtime || {};
+
+        if (runtime.current_construction && new Date(runtime.current_construction.finish_time) <= now) {
+            await completeConstruction(client, { id: cityId }, entityRow);
+        } else {
+            // re-read runtime from entities and decide
+            const fresh = await client.query('SELECT ai_runtime as runtime FROM entities WHERE id = $1', [entityRow.id]);
+            const currentRuntime = (fresh.rows[0] && fresh.rows[0].runtime) || runtime;
+            if (!currentRuntime.current_construction) {
+                await decideNewConstruction(client, { id: cityId }, entityRow);
             }
-
-            await client.query('COMMIT');
-        } catch (err) {
-            try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
-            throw err;
-        } finally {
-            client.release();
         }
+
+        await client.query('COMMIT');
+    } catch (err) {
+        try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
+        throw err;
+    } finally {
+        client.release();
     }
     return true;
 }
@@ -239,7 +240,7 @@ async function decideNewConstruction(client, ai, entityRow) {
     const availablePop = (runtime.population || 0) - (runtime.pop_consumed || 0);
     const popRequiredDelta = reqs.popForNextLevel - reqs.currentPopRequirement;
     if (availablePop < popRequiredDelta) {
-        console.log(`[AI Engine] ⚠️ map_entity ${mapRow.id} necesita más población para mejorar ${bestUpgrade}.`);
+        console.log(`[AI Engine] ⚠️ entity ${entityRow.id} necesita más población para mejorar ${bestUpgrade}.`);
         return;
     }
 
@@ -250,7 +251,7 @@ async function decideNewConstruction(client, ai, entityRow) {
          JOIN resource_types rt ON ri.resource_type_id = rt.id
          WHERE ri.entity_id = $1
          FOR UPDATE`,
-        [mapRow.entity_id]
+        [entityRow.id]
     );
     const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
 
@@ -260,7 +261,7 @@ async function decideNewConstruction(client, ai, entityRow) {
     }
 
     if (!hasEnough) {
-        console.log(`[AI Engine] ❌ map_entity ${mapRow.id} no tiene recursos suficientes para ${bestUpgrade}.`);
+        console.log(`[AI Engine] ❌ entity ${entityRow.id} no tiene recursos suficientes para ${bestUpgrade}.`);
         return;
     }
 

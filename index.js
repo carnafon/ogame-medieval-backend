@@ -20,7 +20,9 @@ const port = process.env.PORT || 3000;
 
 // Middleware para verificar la conexión a la DB
 pool.connect()
-    .then(() => {
+    .then((client) => {
+        // Immediately release the client to avoid holding onto a checked-out client.
+        try { client.release(); } catch (e) { /* ignore */ }
         console.log('✅ Conectado a la base de datos de Neon.');
         // ❌ Importante: Hemos eliminado el código que llamaba a startResourceGenerator,
         // ya que ahora la tarea se ejecutará solo bajo demanda del Web-Cron.
