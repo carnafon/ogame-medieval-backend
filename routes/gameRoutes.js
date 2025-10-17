@@ -313,10 +313,12 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
 
 router.get('/map', authenticateToken, async (req, res) => {
     try {
-         const result = await pool.query(`
-            SELECT 
+    const result = await pool.query(`
+        SELECT 
     e.id,
-    u.username AS name,
+    -- show a display name: prefer ai_cities.name for AI cities, otherwise the user's username
+    CASE WHEN e.type = 'cityIA' AND ac.name IS NOT NULL THEN ac.name ELSE u.username END AS name,
+    e.type,
     e.x_coord,
     e.y_coord,
     e.user_id,
@@ -331,14 +333,15 @@ router.get('/map', authenticateToken, async (req, res) => {
     -- Opcional: edificios en formato json
     json_agg(json_build_object('type', b.type, 'count', 1)) AS buildings
 FROM entities e
-JOIN users u ON u.id = e.user_id
-JOIN factions f ON e.faction_id = f.id
+LEFT JOIN users u ON u.id = e.user_id
+LEFT JOIN ai_cities ac ON ac.entity_id = e.id
+LEFT JOIN factions f ON e.faction_id = f.id
 JOIN resource_inventory ri ON e.id = ri.entity_id
 JOIN resource_types rt ON ri.resource_type_id = rt.id
 LEFT JOIN buildings b ON e.id = b.entity_id
 WHERE rt.name IN ('wood','stone','food')
-GROUP BY e.id, u.username, f.name;
-        `);
+GROUP BY e.id, ac.name, u.username, f.name;
+    `);
         res.status(200).json(result.rows);
     } catch (err) {
         console.error('Error al obtener mapa:', err.message);
