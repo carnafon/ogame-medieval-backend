@@ -261,6 +261,51 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
 // 🗺️ RUTA: MAPA
 // -----------------------------------------------------------------
 
+// -----------------------------------------------------------------
+// RUTA: OBTENER COSTE DE CONSTRUCCIÓN
+// GET /api/build/cost?buildingType=house&entityId=6
+router.get('/build/cost', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const buildingType = req.query.buildingType;
+    const entityId = req.query.entityId ? Number(req.query.entityId) : null;
+
+    if (!buildingType) return res.status(400).json({ message: 'Falta buildingType en la consulta.' });
+
+    try {
+        // Determine entity id: prefer query, fallback to user's entity
+        let targetEntityId = entityId;
+        if (!targetEntityId) {
+            const er = await pool.query('SELECT id FROM entities WHERE user_id = $1 LIMIT 1', [userId]);
+            if (er.rows.length === 0) return res.status(404).json({ message: 'No se encontró entidad para el usuario.' });
+            targetEntityId = er.rows[0].id;
+        }
+
+        const costBase = BUILDING_COSTS[buildingType];
+        if (!costBase) return res.status(400).json({ message: 'Tipo de edificio no válido.' });
+
+        // Find current level
+        const br = await pool.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [targetEntityId, buildingType]);
+        const currentLevel = br.rows.length > 0 ? br.rows[0].level : 0;
+        const factor = 1.7;
+        const cost = {
+            wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
+            stone: Math.ceil(costBase.stone * Math.pow(currentLevel + 1, factor)),
+            food: Math.ceil(costBase.food * Math.pow(currentLevel + 1, factor)),
+        };
+
+        // Get current resources via service
+        const resources = await require('../utils/resourcesService').getResources(targetEntityId);
+
+        const canBuild = (resources.wood || 0) >= cost.wood && (resources.stone || 0) >= cost.stone && (resources.food || 0) >= cost.food;
+
+        return res.status(200).json({ buildingType, entityId: targetEntityId, cost, resources, canBuild });
+    } catch (err) {
+        console.error('Error en build/cost:', err.message);
+        return res.status(500).json({ message: 'Error al calcular coste.' });
+    }
+});
+
+
 router.get('/map', authenticateToken, async (req, res) => {
     try {
          const result = await pool.query(`
