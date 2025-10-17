@@ -221,3 +221,5 @@ module.exports = {
   consumeResourcesWithClient,
   setResourcesWithClient
 };
+// Export the generic setter as well
+module.exports.setResourcesWithClientGeneric = setResourcesWithClientGeneric;
