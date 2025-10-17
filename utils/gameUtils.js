@@ -133,14 +133,23 @@ const calculateProduction = (userBuildings, populationStats) => {
         return production;
     }
 
-    // 1. Calcular producción/consumo fijo de edificios 
+    // 1. Calcular producción/consumo fijo de edificios
+    // Ahora usamos `building.level` como medida para la contribución del edificio.
+    // Si `level` no está presente, hacemos fallback a `count` para compatibilidad con datos antiguos.
     userBuildings.forEach(building => {
         const rate = PRODUCTION_RATES[building.type];
-        if (rate && building.count > 0) {
-            production.wood += (rate.wood || 0) * building.count;
-            production.stone += (rate.stone || 0) * building.count;
-            production.food += (rate.food || 0) * building.count;
-        }
+        if (!rate) return;
+
+        // Preferir `level` si existe, si no usar `count`, si no 0.
+        const qty = (typeof building.level === 'number')
+            ? building.level
+            : (typeof building.count === 'number' ? building.count : 0);
+
+        if (qty <= 0) return;
+
+        production.wood += (rate.wood || 0) * qty;
+        production.stone += (rate.stone || 0) * qty;
+        production.food += (rate.food || 0) * qty;
     });
     
     // 2. Calcular Consumo de Comida basado en la Población actual
