@@ -36,13 +36,39 @@ router.post('/build', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        const currentLevel = await getBuildingLevel(entity.id, buildingType);
+                const currentLevel = await getBuildingLevel(entity.id, buildingType);
         const factor = 1.7;
         const cost = {
             wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
             stone: Math.ceil(costBase.stone * Math.pow(currentLevel + 1, factor)),
             food: Math.ceil(costBase.food * Math.pow(currentLevel + 1, factor)),
         };
+
+                // Check population availability for non-house buildings
+                // Lock the entity row to avoid races when modifying population
+                const entRow = await client.query(
+                    'SELECT current_population, max_population FROM entities WHERE id = $1 FOR UPDATE',
+                    [entity.id]
+                );
+                if (entRow.rows.length === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(404).json({ message: 'Entidad no encontrada.' });
+                }
+                const currPop = parseInt(entRow.rows[0].current_population || 0, 10);
+                const maxPop = parseInt(entRow.rows[0].max_population || 0, 10);
+
+                if (buildingType !== 'house') {
+                    const available = (maxPop - currPop) || 0;
+                    if (available <= 0) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({
+                            message: 'Población insuficiente para asignar al edificio.',
+                            code: 'INSUFFICIENT_POPULATION',
+                            need: 1,
+                            have: available
+                        });
+                    }
+                }
 
         // Consume resources within this same transaction
         try {
@@ -120,6 +146,14 @@ router.post('/build', async (req, res) => {
         const updatedResources = Object.fromEntries(
             updatedResourcesRes.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)])
         );
+
+        // If the building consumes population, increment current_population now (within the same transaction)
+        if (buildingType !== 'house') {
+            await client.query(
+                'UPDATE entities SET current_population = current_population + 1 WHERE id = $1',
+                [entity.id]
+            );
+        }
 
         await client.query('COMMIT');
 
