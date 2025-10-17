@@ -171,9 +171,10 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
 
         // Call the central processor for a single entity
         const rg = require('../jobs/resourceGenerator');
-        const result = await rg.processEntity(entityId, null);
+    const result = await rg.processEntity(entityId, null);
 
-        return res.status(200).json({ message: 'Recursos actualizados correctamente.', entity: { id: entityId, resources: result.resources }, population: result.population });
+    // processEntity already returns { message, entity, population }
+    return res.status(200).json(result);
     } catch (err) {
         console.error('Error en generate-resources:', err.message);
         return res.status(500).json({ message: 'Error al generar recursos.', error: err.message });
