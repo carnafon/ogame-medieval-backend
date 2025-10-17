@@ -75,6 +75,15 @@ async function createPairedCity(clientOrPool, cityData) {
     const ai = await createCity(client, { name: cityData.name || `IA City ${entity.id}` });
     await client.query('UPDATE ai_cities SET entity_id = $1 WHERE id = $2', [entity.id, ai.id]);
 
+    // 2b. Ensure resource_inventory is set to the desired initialResources (defensive)
+    try {
+        const resourcesService = require('./resourcesService');
+        await resourcesService.setResourcesWithClientGeneric(client, entity.id, initialResources);
+    } catch (rsErr) {
+        // non-fatal: log and continue
+        console.warn('Failed to initialize AI city resources in resource_inventory:', rsErr.message);
+    }
+
     // Do NOT store runtime in entities.ai_runtime for AI cities.
     // Resource amounts are already initialized in resource_inventory by createEntityWithResources.
     // Buildings are persisted in the `buildings` table when the AI builds.
