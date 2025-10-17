@@ -21,20 +21,22 @@ const createToken = (userId, username) => {
     );
 };
 
+const { BUILDING_COSTS } = require('../constants/buildings');
+
 //funcion para calcular el coste de un edificio en funcion de su nivel
 function calculateNextLevelCost(building) {
-    const buildingDef = BUILDING_DEFINITIONS[building.type];
-    if (!buildingDef) return { wood: 0, stone: 0, food: 0 };
+  const costDef = BUILDING_COSTS[building.type];
+  if (!costDef) return { wood: 0, stone: 0, food: 0 };
 
-    // Aplicamos el multiplicador por nivel (ejemplo: 1.5 por cada nivel)
-    const multiplier = 1.5;
-    const level = building.level || 0;
+  // Aplicamos el multiplicador por nivel (ejemplo: 1.5 por cada nivel)
+  const multiplier = 1.5;
+  const level = building.level || 0;
 
-    return {
-        wood: Math.ceil(buildingDef.cost.wood * Math.pow(multiplier, level)),
-        stone: Math.ceil(buildingDef.cost.stone * Math.pow(multiplier, level)),
-        food: Math.ceil(buildingDef.cost.food * Math.pow(multiplier, level)),
-    };
+  return {
+    wood: Math.ceil(costDef.wood * Math.pow(multiplier, level)),
+    stone: Math.ceil(costDef.stone * Math.pow(multiplier, level)),
+    food: Math.ceil(costDef.food * Math.pow(multiplier, level)),
+  };
 }
 
 

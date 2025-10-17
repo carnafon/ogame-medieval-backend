@@ -12,13 +12,7 @@ const { authenticateToken } = require('../middleware/auth'); // Importamos el mi
 
 const POPULATION_CHANGE_RATE = 1; 
 
-// Definir costes de construcción
-const BUILDING_COSTS = {
-    'house': { wood: 20, stone: 10, food: 5 },
-    'sawmill': { wood: 50, stone: 30, food: 10 },
-    'quarry': { wood: 40, stone: 80, food: 15 },
-    'farm': { wood: 40, stone: 10, food: 10 }
-};
+const { BUILDING_COSTS } = require('../constants/buildings');
 
 // -----------------------------------------------------------------
 // ⭐️ RUTAS PROTEGIDAS (authenticateToken se ejecuta en index.js)
