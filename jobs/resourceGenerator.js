@@ -24,12 +24,11 @@ async function processEntity(entityId, options) {
         await client.query('BEGIN');
 
 
-            // 🔹 Obtener datos base de la entidad (lock para evitar race conditions)
+            // 🔹 Obtener datos base de la entidad (lock solo la fila de entities para evitar FOR UPDATE en outer join)
             const entityRes = await client.query(
-                `SELECT e.id, e.type, e.current_population, e.last_resource_update, e.faction_id, e.x_coord, e.y_coord, e.max_population, f.name AS faction_name
-                 FROM entities e
-                 LEFT JOIN factions f ON f.id = e.faction_id
-                 WHERE e.id = $1
+                `SELECT id, type, current_population, last_resource_update, faction_id, x_coord, y_coord, max_population
+                 FROM entities
+                 WHERE id = $1
                  FOR UPDATE`,
                 [entityId]
             );
@@ -40,6 +39,16 @@ async function processEntity(entityId, options) {
     }
 
     const entity = entityRes.rows[0];
+    // Obtener nombre de facción (no necesita lock)
+    let faction_name = '';
+    if (entity.faction_id) {
+        try {
+            const fRes = await client.query('SELECT name FROM factions WHERE id = $1', [entity.faction_id]);
+            faction_name = fRes.rows.length ? fRes.rows[0].name : '';
+        } catch (e) {
+            faction_name = '';
+        }
+    }
     const last = entity.last_resource_update ? new Date(entity.last_resource_update) : new Date();
     const now = new Date();
     const secondsElapsed = Math.max(0, Math.floor((now - last) / 1000));
@@ -109,7 +118,7 @@ async function processEntity(entityId, options) {
             entity: {
                 id: entity.id,
                 faction_id: entity.faction_id || null,
-                faction_name: entity.faction_name || '',
+                faction_name: faction_name || '',
                 x_coord: entity.x_coord || 0,
                 y_coord: entity.y_coord || 0,
                 current_population: newPopulation,
