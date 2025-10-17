@@ -59,7 +59,14 @@ router.post('/build', async (req, res) => {
         } catch (err) {
             if (err && err.code === 'INSUFFICIENT') {
                 await client.query('ROLLBACK');
-                return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
+                // Propagate a structured error with details from the resourcesService
+                return res.status(400).json({
+                    message: err.message || 'Recursos insuficientes para construir.',
+                    code: err.code,
+                    resource: err.resource || null,
+                    need: err.need || null,
+                    have: err.have || null
+                });
             }
             throw err;
         }
