@@ -54,11 +54,14 @@ router.post('/build', async (req, res) => {
                     await client.query('ROLLBACK');
                     return res.status(404).json({ message: 'Entidad no encontrada.' });
                 }
+                // In this project `max_population` is the capacity and
+                // `current_population` is the available (free) population.
                 const currPop = parseInt(entRow.rows[0].current_population || 0, 10);
                 const maxPop = parseInt(entRow.rows[0].max_population || 0, 10);
 
                 if (buildingType !== 'house') {
-                    const available = (maxPop - currPop) || 0;
+                    // available free population is stored in current_population
+                    const available = currPop || 0;
                     if (available <= 0) {
                         await client.query('ROLLBACK');
                         return res.status(400).json({
@@ -127,6 +130,14 @@ router.post('/build', async (req, res) => {
         // 5️⃣ Obtener edificios actualizados
         const updatedBuildings = await getBuildings(entity.id);
 
+
+        // If the building consumes population, decrement current_population now (within the same transaction)
+        if (buildingType !== 'house') {
+            await client.query(
+                'UPDATE entities SET current_population = current_population - 1 WHERE id = $1',
+                [entity.id]
+            );
+        }
 
         // 6️⃣ Obtener entidad actualizada (población, recursos)
         const updatedEntityRes = await client.query(
