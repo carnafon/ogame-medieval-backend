@@ -7,6 +7,8 @@ const JWT_SECRET = process.env.JWT_SECRET;
  * Si es válido, añade el objeto 'user' (con id y username) a req.user.
  */
 const authenticateToken = (req, res, next) => {
+    // Let preflight CORS requests pass through so the CORS middleware can set headers
+    if (req.method === 'OPTIONS') return next();
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; // Espera un formato "Bearer TOKEN"
 
