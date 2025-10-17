@@ -13,6 +13,7 @@ const { authenticateToken } = require('../middleware/auth'); // Importamos el mi
 const POPULATION_CHANGE_RATE = 1; 
 
 const { BUILDING_COSTS } = require('../constants/buildings');
+const { ALLOWED_BUILDINGS_BY_FACTION } = require('../constants/buildingFactions');
 
 // -----------------------------------------------------------------
 // ⭐️ RUTAS PROTEGIDAS (authenticateToken se ejecuta en index.js)
@@ -47,12 +48,38 @@ router.post('/build', async (req, res) => {
                 // Check population availability for non-house buildings
                 // Lock the entity row to avoid races when modifying population
                 const entRow = await client.query(
-                    'SELECT current_population, max_population FROM entities WHERE id = $1 FOR UPDATE',
+                    'SELECT current_population, max_population, faction_id FROM entities WHERE id = $1 FOR UPDATE',
                     [entity.id]
                 );
                 if (entRow.rows.length === 0) {
                     await client.query('ROLLBACK');
                     return res.status(404).json({ message: 'Entidad no encontrada.' });
+                }
+                // Determine faction name (if any) for permission checks
+                let factionName = null;
+                try {
+                    const fid = entRow.rows[0].faction_id;
+                    if (fid) {
+                        const fnr = await client.query('SELECT name FROM factions WHERE id = $1 LIMIT 1', [fid]);
+                        if (fnr.rows.length > 0) factionName = fnr.rows[0].name;
+                    }
+                } catch (fErr) {
+                    console.warn('Failed to load faction name for permission check:', fErr.message);
+                }
+
+                // Check faction-based building permissions
+                if (factionName && ALLOWED_BUILDINGS_BY_FACTION && Object.keys(ALLOWED_BUILDINGS_BY_FACTION).length > 0) {
+                    const allowedList = ALLOWED_BUILDINGS_BY_FACTION[factionName];
+                    if (Array.isArray(allowedList) && !allowedList.includes(buildingType)) {
+                        await client.query('ROLLBACK');
+                        return res.status(403).json({
+                            message: `La facción '${factionName}' no está permitida para construir '${buildingType}'.`,
+                            code: 'NOT_ALLOWED_FOR_FACTION',
+                            allowed: false,
+                            faction: factionName,
+                            buildingType
+                        });
+                    }
                 }
                 // In this project `max_population` is the capacity and
                 // `current_population` is the available (free) population.
@@ -261,7 +288,22 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
 
         const canBuild = (resources.wood || 0) >= cost.wood && (resources.stone || 0) >= cost.stone && (resources.food || 0) >= cost.food;
 
-        return res.status(200).json({ buildingType, entityId: targetEntityId, cost, resources, canBuild });
+        // Determine faction and whether this building is allowed
+        let factionName = null;
+        try {
+            const fr = await pool.query('SELECT f.name FROM entities e JOIN factions f ON e.faction_id = f.id WHERE e.id = $1 LIMIT 1', [targetEntityId]);
+            if (fr.rows.length > 0) factionName = fr.rows[0].name;
+        } catch (fErr) {
+            console.warn('Failed to load faction for cost check:', fErr.message);
+        }
+
+        let allowed = true;
+        if (factionName && ALLOWED_BUILDINGS_BY_FACTION && Object.keys(ALLOWED_BUILDINGS_BY_FACTION).length > 0) {
+            const allowedList = ALLOWED_BUILDINGS_BY_FACTION[factionName];
+            if (Array.isArray(allowedList)) allowed = allowedList.includes(buildingType);
+        }
+
+        return res.status(200).json({ buildingType, entityId: targetEntityId, cost, resources, canBuild, allowed, faction: factionName });
     } catch (err) {
         console.error('Error en build/cost:', err.message);
         return res.status(500).json({ message: 'Error al calcular coste.' });
