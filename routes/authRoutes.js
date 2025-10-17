@@ -78,18 +78,22 @@ router.post('/register', async (req, res) => {
         );
 
 
-        // 4️⃣ Inicializar recursos del jugador
-        const resourceTypes = await pool.query('SELECT id FROM resource_types');
-        const entityId = newEntity.rows[0].id;
+    // 4️⃣ Inicializar recursos del jugador
+    // Obtenemos nombre e id para decidir el importe inicial
+    const resourceTypes = await pool.query('SELECT id, name FROM resource_types');
+    const entityId = newEntity.rows[0].id;
 
-        for (const r of resourceTypes.rows) {
-            
-        console.log(`Probando insertar recurso ${r.id} para la entidad ${entityId}`);
-            await pool.query(
-                'INSERT INTO resource_inventory (entity_id, resource_type_id, amount) VALUES ($1, $2, 0)',
-                [entityId, r.id]
-            );
-        }
+    const defaults = new Set(['wood', 'stone', 'water', 'food']);
+
+    for (const r of resourceTypes.rows) {
+      const name = (r.name || '').toLowerCase();
+      const amount = defaults.has(name) ? 100 : 0;
+      // insertamos el inventario con el importe por defecto
+      await pool.query(
+        'INSERT INTO resource_inventory (entity_id, resource_type_id, amount) VALUES ($1, $2, $3)',
+        [entityId, r.id, amount]
+      );
+    }
 
         console.log(`Nuevo usuario registrado: ${username} (ID: ${userId}) en las coordenadas (${x}, ${y})`);
         const token = createToken(userId, username);
