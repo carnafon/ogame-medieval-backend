@@ -40,6 +40,14 @@ PRODUCTION_RATES['libreria'] = { books: 1 };
 PRODUCTION_RATES['cerveceria'] = { beer: 1 };
 PRODUCTION_RATES['forja'] = { tools: 1 };
 
+// Specialized buildings (produce 1 unit per tick)
+PRODUCTION_RATES['elixireria'] = { preservation_elixir: 1 };
+PRODUCTION_RATES['tintoreria_real'] = { royal_dye: 1 };
+PRODUCTION_RATES['escriba'] = { illustrated_parchment: 1 };
+PRODUCTION_RATES['artificiero'] = { explosive_compound: 1 };
+PRODUCTION_RATES['herreria_real'] = { damascus_steel: 1 };
+PRODUCTION_RATES['lineria'] = { linen: 1 };
+
 // Añadimos la Sastrería como edificio procesador que produce silk_cloth
 PRODUCTION_RATES['sastreria'] = { silk_cloth: 1 };
 
@@ -59,6 +67,12 @@ const PROCESSING_RECIPES = {
     , books: { wool: 2, wood: 4 }
     , beer: { food: 6, water: 4 }
     , tools: { copper: 3, wood: 2 }
+    , preservation_elixir: { honey: 4, spice: 3 }
+    , royal_dye: { copper: 2, purple_dye: 2 }
+    , illustrated_parchment: { water: 2, books: 3 }
+    , explosive_compound: { coal: 5, baked_brick: 2 }
+    , damascus_steel: { stone: 6, iron_ingot: 2 }
+    , linen: { leather: 4, silk_cloth: 2 }
 };
 
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)

@@ -23,6 +23,12 @@ const BUILDING_COSTS = {
   libreria: { wood: 45, stone: 10, food: 5 },
   cerveceria: { wood: 30, stone: 10, food: 10 },
   forja: { wood: 40, stone: 30, food: 8 },
+  elixireria: { wood: 30, stone: 20, food: 10 },
+  tintoreria_real: { wood: 35, stone: 20, food: 10 },
+  escriba: { wood: 20, stone: 10, food: 5 },
+  artificiero: { wood: 45, stone: 30, food: 15 },
+  herreria_real: { wood: 60, stone: 50, food: 15 },
+  lineria: { wood: 30, stone: 20, food: 8 },
 };
 
 module.exports = { BUILDING_COSTS };
