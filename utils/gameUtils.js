@@ -28,6 +28,18 @@ const PRODUCTION_RATES = {
     'apiary': { honey: 1 }
 };
 
+// Procesados adicionales: cada edificio produce 1 unidad por tick (10s) de su producto
+PRODUCTION_RATES['carpinteria'] = { lumber: 1 }; // produces processed wood
+PRODUCTION_RATES['fabrica_ladrillos'] = { baked_brick: 1 };
+PRODUCTION_RATES['bazar_especias'] = { spice: 1 };
+PRODUCTION_RATES['alfareria'] = { refined_clay: 1 };
+PRODUCTION_RATES['tintoreria_morada'] = { purple_dye: 1 };
+PRODUCTION_RATES['herreria'] = { iron_ingot: 1 };
+PRODUCTION_RATES['salazoneria'] = { salted: 1 };
+PRODUCTION_RATES['libreria'] = { books: 1 };
+PRODUCTION_RATES['cerveceria'] = { beer: 1 };
+PRODUCTION_RATES['forja'] = { tools: 1 };
+
 // Añadimos la Sastrería como edificio procesador que produce silk_cloth
 PRODUCTION_RATES['sastreria'] = { silk_cloth: 1 };
 
@@ -36,6 +48,17 @@ PRODUCTION_RATES['sastreria'] = { silk_cloth: 1 };
 const PROCESSING_RECIPES = {
     // La Sastrería produce silk_cloth consumiendo 10 wool, 2 wood y 1 purple_dye por unidad
     silk_cloth: { wool: 10, wood: 2, purple_dye: 1 }
+    // Otros procesos añadidos
+    , lumber: { wood: 5, stone: 1 }
+    , baked_brick: { clay: 8, coal: 2 }
+    , spice: { food: 5, honey: 2 }
+    , refined_clay: { clay: 6, water: 3 }
+    , purple_dye: { wool: 6, copper: 1 }
+    , iron_ingot: { copper: 4, coal: 3 }
+    , salted: { leather: 3, stone: 1 }
+    , books: { wool: 2, wood: 4 }
+    , beer: { food: 6, water: 4 }
+    , tools: { copper: 3, wood: 2 }
 };
 
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)
