@@ -36,34 +36,20 @@ router.post('/', authenticateToken, async (req, res) => {
 
     // For update lock
     await client.query(`SELECT id FROM entities WHERE id = $1 FOR UPDATE`, [entityId]);
+    // Update any provided resource by name; ignore unknown keys
+    const existingTypesRes = await client.query(`SELECT id, name FROM resource_types`);
+    const nameToId = Object.fromEntries(existingTypesRes.rows.map(r => [r.name.toLowerCase(), r.id]));
 
-    // Update each resource if provided
-    const wood = typeof resources.wood === 'number' ? resources.wood : null;
-    const stone = typeof resources.stone === 'number' ? resources.stone : null;
-    const food = typeof resources.food === 'number' ? resources.food : null;
+    for (const [k, v] of Object.entries(resources)) {
+      // only update numeric values and known resource types
+      if (typeof v !== 'number') continue;
+      const lname = k.toLowerCase();
+      const typeId = nameToId[lname];
+      if (!typeId) continue; // skip unknown resource names
 
-    if (wood !== null) {
       await client.query(
-        `UPDATE resource_inventory
-         SET amount = $1
-         WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name = 'wood')`,
-        [wood, entityId]
-      );
-    }
-    if (stone !== null) {
-      await client.query(
-        `UPDATE resource_inventory
-         SET amount = $1
-         WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name = 'stone')`,
-        [stone, entityId]
-      );
-    }
-    if (food !== null) {
-      await client.query(
-        `UPDATE resource_inventory
-         SET amount = $1
-         WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name = 'food')`,
-        [food, entityId]
+        `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = $3`,
+        [v, entityId, typeId]
       );
     }
 
