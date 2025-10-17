@@ -59,7 +59,6 @@ router.post('/build', async (req, res) => {
         } catch (err) {
             if (err && err.code === 'INSUFFICIENT') {
                 await client.query('ROLLBACK');
-                client.release();
                 return res.status(400).json({ message: 'Recursos insuficientes para construir.' });
             }
             throw err;
@@ -155,7 +154,7 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
 
 
          if (entityRes.rows.length === 0) {
-        client.release();
+        await client.query('ROLLBACK');
         return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
          }
 
