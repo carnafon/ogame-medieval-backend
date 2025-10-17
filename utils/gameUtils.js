@@ -28,6 +28,16 @@ const PRODUCTION_RATES = {
     'apiary': { honey: 1 }
 };
 
+// Añadimos la Sastrería como edificio procesador que produce silk_cloth
+PRODUCTION_RATES['sastreria'] = { silk_cloth: 1 };
+
+// Procesamiento: productos que requieren insumos por unidad producida.
+// Mapeo: producto -> { inputResource: amountPerUnit, ... }
+const PROCESSING_RECIPES = {
+    // La Sastrería produce silk_cloth consumiendo 10 wool, 2 wood y 1 purple_dye por unidad
+    silk_cloth: { wool: 10, wood: 2, purple_dye: 1 }
+};
+
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)
 const TICK_SECONDS = 10;
 
@@ -205,5 +215,6 @@ module.exports = {
     RESOURCE_GENERATOR_STONE_PER_TICK,
     MAP_SIZE,
     COORD_RADIUS, // Exportamos el radio de influencia
-    findAvailableCoordinates
+    findAvailableCoordinates,
+    PROCESSING_RECIPES
 };

@@ -12,6 +12,7 @@ const BUILDING_COSTS = {
   copper_mine: { wood: 35, stone: 45, food: 0 },
   sheepfold: { wood: 20, stone: 10, food: 5 },
   apiary: { wood: 15, stone: 5, food: 0 },
+  sastreria: { wood: 60, stone: 20, food: 10 },
 };
 
 module.exports = { BUILDING_COSTS };

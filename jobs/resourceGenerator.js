@@ -80,11 +80,49 @@ async function processEntity(entityId, options) {
             const currentResources = await require('../utils/resourcesService').getResources(entityId);
 
             // 🔹 Actualizar cantidades para todas las claves producidas
-            const produced = accrued || {};
+            let produced = accrued || {};
             const newResources = { ...currentResources };
+
+            // Procesamiento con recetas: si un recurso producido es de tipo processed
+            // y tiene una receta, comprobamos si hay insumos suficientes. Solo
+            // producimos la cantidad de unidades que puedan cubrirse con insumos.
+            const { PROCESSING_RECIPES } = require('../utils/gameUtils');
+
             Object.keys(produced).forEach(k => {
                 const add = produced[k] || 0;
-                newResources[k] = (newResources[k] || 0) + add;
+                // Si no hay receta, sumar tal cual
+                const recipe = PROCESSING_RECIPES[k];
+                if (!recipe || add <= 0) {
+                    newResources[k] = (newResources[k] || 0) + add;
+                    return;
+                }
+
+                // Para recursos procesados con receta, calcular cuántas unidades
+                // podemos producir dado el inventario actual. La receta define
+                // insumos por unidad.
+                let producibleUnits = add;
+                Object.keys(recipe).forEach(inputKey => {
+                    const requiredPerUnit = recipe[inputKey] || 0;
+                    if (requiredPerUnit <= 0) return;
+                    const have = newResources[inputKey] || 0;
+                    const maxByThisInput = Math.floor(have / requiredPerUnit);
+                    producibleUnits = Math.min(producibleUnits, maxByThisInput);
+                });
+
+                if (producibleUnits <= 0) {
+                    // No hay insumos suficientes: no producir ni consumir
+                    return;
+                }
+
+                // Consumir insumos
+                Object.keys(recipe).forEach(inputKey => {
+                    const requiredPerUnit = recipe[inputKey] || 0;
+                    if (requiredPerUnit <= 0) return;
+                    newResources[inputKey] = (newResources[inputKey] || 0) - (requiredPerUnit * producibleUnits);
+                });
+
+                // Añadir producto final
+                newResources[k] = (newResources[k] || 0) + producibleUnits;
             });
             // aplicar las sumas fijas por tick también
             newResources.wood = (newResources.wood || 0) + extraWood;
