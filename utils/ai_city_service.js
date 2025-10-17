@@ -75,10 +75,9 @@ async function createPairedCity(clientOrPool, cityData) {
     const ai = await createCity(client, { name: cityData.name || `IA City ${entity.id}` });
     await client.query('UPDATE ai_cities SET entity_id = $1 WHERE id = $2', [entity.id, ai.id]);
 
-    // 3. store runtime inside entities.ai_runtime
-    const runtime = cityData.runtime || { buildings: {}, resources: initialResources, population: cityData.population || 100, pop_consumed: 0, current_construction: null };
-    if (!runtime.last_resource_update) runtime.last_resource_update = new Date().toISOString();
-    await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [runtime, entity.id]);
+    // Do NOT store runtime in entities.ai_runtime for AI cities.
+    // Resource amounts are already initialized in resource_inventory by createEntityWithResources.
+    // Buildings are persisted in the `buildings` table when the AI builds.
 
     return { entity, ai_city: ai };
 }

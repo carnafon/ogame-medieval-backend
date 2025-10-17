@@ -24,7 +24,7 @@ async function runEconomicUpdate(pool) {
         const now = new Date();
 
         for (const ai of aiCities) {
-            // For each AI city, lock the linked entity row and operate on entities.ai_runtime
+            // For each AI city, find linked entity id and operate directly on resource_inventory and buildings.
             const entRes = await pool.query('SELECT entity_id FROM ai_cities WHERE id = $1', [ai.id]);
             if (entRes.rows.length === 0 || !entRes.rows[0].entity_id) continue;
             const entityId = entRes.rows[0].entity_id;
@@ -32,41 +32,91 @@ async function runEconomicUpdate(pool) {
             const client = await pool.connect();
             try {
                 await client.query('BEGIN');
-                const eRowRes = await client.query('SELECT id, ai_runtime FROM entities WHERE id = $1 FOR UPDATE', [entityId]);
-                if (eRowRes.rows.length === 0) { await client.query('COMMIT'); client.release(); continue; }
-                const entityRow = eRowRes.rows[0];
-                const runtime = entityRow.ai_runtime || {};
 
-                // Production: compute seconds since last_resource_update and produce resources
+                // Compute production based on buildings and persist produced amounts to resource_inventory
                 try {
-                    const lastUpdate = runtime.last_resource_update ? new Date(runtime.last_resource_update) : new Date();
-                    const secondsElapsed = Math.max(0, Math.floor((now - lastUpdate) / 1000));
-                    if (secondsElapsed >= TICK_SECONDS) {
-                        // load buildings for entity
-                        const buildings = await getBuildings(entityRow.id);
-                        const popStats = { current_population: runtime.population || 0 };
-                        const produced = calculateProductionForDuration(buildings, popStats, secondsElapsed);
-                        // Merge produced into runtime.resources
-                        const newResources = Object.assign({}, runtime.resources || {});
-                        Object.keys(produced).forEach(k => { newResources[k] = (newResources[k] || 0) + produced[k]; });
-                        // Persist to resource_inventory via generic setter using client
-                        await resourcesService.setResourcesWithClientGeneric(client, entityRow.id, newResources);
-                        // Update runtime resources and last_resource_update
-                        runtime.resources = newResources;
-                        runtime.last_resource_update = now.toISOString();
-                        await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [runtime, entityRow.id]);
+                    const buildings = await getBuildings(entityId);
+                    // Load population from entities table (current_population)
+                    const entRow = await client.query('SELECT current_population FROM entities WHERE id = $1 FOR UPDATE', [entityId]);
+                    const population = entRow.rows.length > 0 ? parseInt(entRow.rows[0].current_population || 0, 10) : 0;
+                    const popStats = { current_population: population };
+                    const produced = calculateProductionForDuration(buildings, popStats, TICK_SECONDS);
+                    if (produced && Object.keys(produced).length > 0) {
+                        await resourcesService.setResourcesWithClientGeneric(client, entityId, produced);
+                        // update the entities.last_resource_update timestamp so other systems can inspect it
+                        await client.query('UPDATE entities SET last_resource_update = $1 WHERE id = $2', [now.toISOString(), entityId]);
                     }
                 } catch (prodErr) {
-                    console.warn('[AI Engine] Error processing production for entity', entityRow.id, prodErr.message);
+                    console.warn('[AI Engine] Error processing production for entity', entityId, prodErr.message);
                 }
 
-                if (runtime.current_construction && new Date(runtime.current_construction.finish_time) <= now) {
-                    await completeConstruction(client, ai, entityRow);
-                } else {
-                    // decide new construction if not building
-                    if (!runtime.current_construction) {
-                        await decideNewConstruction(client, ai, entityRow);
+                // Decide a construction: pick cheapest/lowest-level building and, if resources & population available, build it immediately
+                try {
+                    // load building levels
+                    const curBuildings = await getBuildings(entityId);
+                    const runtimeBuildings = {};
+                    curBuildings.forEach(b => { runtimeBuildings[b.type] = b.level || 0; });
+
+                    // choose building with lowest level
+                    let bestUpgrade = null;
+                    let lowestLevel = Infinity;
+                    for (const buildingId in BUILDING_CONFIG) {
+                        const currentLevel = runtimeBuildings[buildingId] || 0;
+                        if (currentLevel < lowestLevel) {
+                            lowestLevel = currentLevel;
+                            bestUpgrade = buildingId;
+                        }
                     }
+                    if (bestUpgrade) {
+                        const reqs = calculateUpgradeRequirements(bestUpgrade, lowestLevel);
+                        if (reqs) {
+                            // check population
+                            const entityRow = await client.query('SELECT current_population FROM entities WHERE id = $1 FOR UPDATE', [entityId]);
+                            const availablePop = entityRow.rows.length > 0 ? parseInt(entityRow.rows[0].current_population || 0, 10) : 0;
+                            const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
+                            if (availablePop >= popNeeded) {
+                                // lock and read resource_inventory
+                                const rows = await client.query(
+                                    `SELECT rt.name, ri.amount
+                                     FROM resource_inventory ri
+                                     JOIN resource_types rt ON ri.resource_type_id = rt.id
+                                     WHERE ri.entity_id = $1
+                                     FOR UPDATE`,
+                                    [entityId]
+                                );
+                                const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+
+                                let hasEnough = true;
+                                for (const resource in reqs.requiredCost) {
+                                    if ((currentResources[resource] || 0) < reqs.requiredCost[resource]) { hasEnough = false; break; }
+                                }
+
+                                if (hasEnough) {
+                                    // Deduct resources
+                                    for (const resource in reqs.requiredCost) {
+                                        const amount = reqs.requiredCost[resource] || 0;
+                                        if (amount <= 0) continue;
+                                        await client.query(
+                                            `UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name = $3)`,
+                                            [amount, entityId, resource]
+                                        );
+                                    }
+
+                                    // Persist building level increment
+                                    const blRes = await client.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, bestUpgrade]);
+                                    if (blRes.rows.length > 0) {
+                                        await client.query('UPDATE buildings SET level = level + 1 WHERE entity_id = $1 AND type = $2', [entityId, bestUpgrade]);
+                                    } else {
+                                        await client.query('INSERT INTO buildings (entity_id, type, level) VALUES ($1,$2,1)', [entityId, bestUpgrade]);
+                                    }
+
+                                    console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
+                                }
+                            }
+                        }
+                    }
+                } catch (buildErr) {
+                    console.warn('[AI Engine] Error deciding/performing construction for entity', entityId, buildErr.message);
                 }
 
                 await client.query('COMMIT');
