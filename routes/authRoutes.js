@@ -70,32 +70,23 @@ router.post('/register', async (req, res) => {
 
 
 
-        // 3️⃣ Crear entidad del jugador
-        const newEntity = await pool.query(
-            `INSERT INTO entities 
-            (user_id, type, faction_id, x_coord, y_coord, current_population, last_resource_update)
-            VALUES ($1,'player',$2,$3,$4,$5,NOW())
-            RETURNING id, x_coord, y_coord, current_population, last_resource_update, faction_id`,
-            [userId, factionId, x, y, BASE_POPULATION]
-        );
-
-
-    // 4️⃣ Inicializar recursos del jugador
-    // Obtenemos nombre e id para decidir el importe inicial
-    const resourceTypes = await pool.query('SELECT id, name FROM resource_types');
-    const entityId = newEntity.rows[0].id;
-
-    const defaults = new Set(['wood', 'stone', 'water', 'food']);
-
-    for (const r of resourceTypes.rows) {
-      const name = (r.name || '').toLowerCase();
-      const amount = defaults.has(name) ? 100 : 0;
-      // insertamos el inventario con el importe por defecto
-      await pool.query(
-        'INSERT INTO resource_inventory (entity_id, resource_type_id, amount) VALUES ($1, $2, $3)',
-        [entityId, r.id, amount]
-      );
-    }
+        // 3️⃣ Crear entidad del jugador y inicializar recursos usando helper
+        const { createEntityWithResources } = require('../utils/entityService');
+        const resourceTypes = await pool.query('SELECT id, name FROM resource_types');
+        const defaults = {};
+        for (const r of resourceTypes.rows) {
+          const name = (r.name || '').toLowerCase();
+          defaults[name] = (new Set(['wood','stone','water','food']).has(name)) ? 100 : 0;
+        }
+        const newEntity = await createEntityWithResources(pool, {
+          user_id: userId,
+          faction_id: factionId,
+          type: 'player',
+          x_coord: x,
+          y_coord: y,
+          population: BASE_POPULATION,
+          initialResources: defaults
+        });
 
     // 5️⃣ Crear ciudades IA para las demás facciones
     try {

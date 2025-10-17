@@ -50,33 +50,33 @@ async function createPairedCity(clientOrPool, cityData) {
 
     // Using existing client
     const client = clientOrPool;
-    // 1. create entity row
-    const entQ = `INSERT INTO entities (user_id, faction_id, type, x_coord, y_coord, population) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`;
-    const entParams = [null, cityData.faction_id || null, cityData.type || 'cityIA', cityData.x_coord || 0, cityData.y_coord || 0, cityData.population || 0];
-    const entRes = await client.query(entQ, entParams);
-    const entity = entRes.rows[0];
+
+    // Compute initialResources: prefer explicit initialResources, otherwise default 1000 for every resource type
+    let initialResources = cityData.initialResources;
+    if (!initialResources || Object.keys(initialResources).length === 0) {
+        const rtRes = await client.query('SELECT name FROM resource_types');
+        initialResources = {};
+        rtRes.rows.forEach(r => { initialResources[(r.name || '').toLowerCase()] = 1000; });
+    }
+
+    // 1. create entity row using shared service
+    const entityService = require('./entityService');
+    const entity = await entityService.createEntityWithResources(client, {
+        user_id: cityData.user_id || null,
+        faction_id: cityData.faction_id || null,
+        type: cityData.type || 'cityIA',
+        x_coord: cityData.x_coord || 0,
+        y_coord: cityData.y_coord || 0,
+        population: cityData.population || 100,
+        initialResources
+    });
 
     // 2. create ai_cities row and attach to entity
     const ai = await createCity(client, { name: cityData.name || `IA City ${entity.id}` });
     await client.query('UPDATE ai_cities SET entity_id = $1 WHERE id = $2', [entity.id, ai.id]);
 
     // 3. store runtime inside entities.ai_runtime
-    // Build runtime defaults: population default 100, resources default 1000 each if not provided
-    let runtime = cityData.runtime || {};
-    runtime.buildings = runtime.buildings || {};
-    runtime.pop_consumed = runtime.pop_consumed || 0;
-    runtime.current_construction = runtime.current_construction || null;
-    runtime.population = (typeof runtime.population === 'number') ? runtime.population : (cityData.population || 100);
-
-    // If resources not provided or empty, load all resource types and set each to 1000
-    if (!runtime.resources || Object.keys(runtime.resources).length === 0) {
-        const rtRes = await client.query('SELECT name FROM resource_types');
-        const resMap = {};
-        rtRes.rows.forEach(r => { resMap[(r.name || '').toLowerCase()] = 1000; });
-        runtime.resources = resMap;
-    }
-
-    // Ensure last_resource_update exists
+    const runtime = cityData.runtime || { buildings: {}, resources: initialResources, population: cityData.population || 100, pop_consumed: 0, current_construction: null };
     if (!runtime.last_resource_update) runtime.last_resource_update = new Date().toISOString();
     await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [runtime, entity.id]);
 
