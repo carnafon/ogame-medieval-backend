@@ -68,10 +68,35 @@ async function runEconomicUpdate(pool) {
                     const popStats = { current_population: popSummary.total || 0 };
                     const produced = calculateProductionForDuration(buildings, popStats, TICK_SECONDS);
                     if (produced && Object.keys(produced).length > 0) {
-                        console.log(`[AI Engine] entity=${entityId} produced:`, produced);
-                        await resourcesService.setResourcesWithClientGeneric(client, entityId, produced);
+                        console.log(`[AI Engine] entity=${entityId} produced (deltas):`, produced);
+                        // Read current inventory (lock rows) and apply deltas to compute absolute new amounts
+                        const invRows = await client.query(
+                            `SELECT lower(rt.name) as name, ri.amount
+                             FROM resource_inventory ri
+                             JOIN resource_types rt ON ri.resource_type_id = rt.id
+                             WHERE ri.entity_id = $1
+                             FOR UPDATE`,
+                            [entityId]
+                        );
+                        const before = Object.fromEntries(invRows.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+                        const toWrite = {};
+                        Object.keys(produced).forEach(k => {
+                            const key = k.toString().toLowerCase();
+                            const delta = Number(produced[k]) || 0;
+                            const have = Number(before[key] || 0);
+                            toWrite[key] = Math.max(0, have + delta);
+                        });
+                        console.log(`[AI Engine] entity=${entityId} resource before:`, before, 'toWrite (after applying deltas):', toWrite);
+                        await resourcesService.setResourcesWithClientGeneric(client, entityId, toWrite);
                         // update the entities.last_resource_update timestamp so other systems can inspect it
                         await client.query('UPDATE entities SET last_resource_update = $1 WHERE id = $2', [now.toISOString(), entityId]);
+                        // log after snapshot
+                        const afterRows = await client.query(
+                            `SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
+                            [entityId]
+                        );
+                        const after = Object.fromEntries(afterRows.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+                        console.log(`[AI Engine] entity=${entityId} resource after:`, after);
                     } else {
                         console.log(`[AI Engine] entity=${entityId} produced nothing this tick.`);
                     }
