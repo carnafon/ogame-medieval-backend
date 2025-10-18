@@ -101,5 +101,58 @@ async function setPopulationForTypeWithClient(client, entityId, type, currentPop
   );
 }
 
+// --- New helpers for occupation/available calculation ---
+
+// factorial with small cap to avoid huge numbers
+function factorial(n) {
+  const num = Math.max(0, Math.floor(Number(n) || 0));
+  const cap = 10; // avoid extremely large factorials
+  const upto = Math.min(num, cap);
+  let r = 1;
+  for (let i = 2; i <= upto; i++) r *= i;
+  return r;
+}
+
+/**
+ * Compute occupation from an array of building objects.
+ * Each building contributes factorial(level) where level is building.level if present,
+ * otherwise building.count is used as a fallback. Non-numeric levels/counts are treated as 0.
+ * buildings: [{ type, level?, count?, ... }, ...]
+ */
+function computeOccupationFromBuildings(buildings = []) {
+  if (!Array.isArray(buildings)) return 0;
+  let occupation = 0;
+  for (const b of buildings) {
+    if (!b) continue;
+    const lvl = Number.isFinite(Number(b.level)) ? Number(b.level) : (Number.isFinite(Number(b.count)) ? Number(b.count) : 0);
+    if (lvl <= 0) continue;
+    occupation += factorial(lvl);
+  }
+  return occupation;
+}
+
+/**
+ * Calculate available population for an entity by querying current population and its buildings.
+ * Returns { entityId, current, occupation, available }
+ */
+async function calculateAvailablePopulation(entityId) {
+  const client = await pool.connect();
+  try {
+    // get population totals
+    const pop = await getPopulationSummaryWithClient(client, entityId);
+    const current = pop.total || 0;
+
+    // get buildings for entity
+    const bres = await client.query('SELECT type, level, count FROM buildings WHERE entity_id = $1', [entityId]);
+    const buildings = Array.isArray(bres.rows) ? bres.rows : [];
+
+    const occupation = computeOccupationFromBuildings(buildings);
+    const available = Math.max(0, current - occupation);
+    return { entityId, current, occupation, available };
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = { initPopulations, getPopulationSummary, getPopulationSummaryWithClient, setPopulationForTypeWithClient, POP_TYPES };
 
