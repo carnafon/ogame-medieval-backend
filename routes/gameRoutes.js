@@ -81,13 +81,13 @@ router.post('/build', async (req, res) => {
                 // In this project `max_population` is the capacity and
                 // `current_population` is the available (free) population.
                 const populationService = require('../utils/populationService');
-                const popSummary = await populationService.getPopulationSummaryWithClient(client, entity.id);
-                const currPop = popSummary.total || 0;
-                const maxPop = popSummary.max || 0;
+                // Use centralized helper inside the transaction to compute occupation/available
+                const popCalc = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
+                const currPop = popCalc.total || 0;
+                const maxPop = popCalc.max || 0;
 
                 if (buildingType !== 'house') {
-                    // available free population is stored in current_population
-                    const available = currPop || 0;
+                    const available = popCalc.available || 0;
                     if (available <= 0) {
                         await client.query('ROLLBACK');
                         return res.status(400).json({
@@ -159,7 +159,8 @@ router.post('/build', async (req, res) => {
 
         // If the building consumes population, decrement one unit from the 'poor' bucket by default
         if (buildingType !== 'house') {
-            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.max(0, currPop - 1), popSummary.max, Math.max(0, popSummary.max - (currPop - 1)));
+            // Decrement one unit from poor bucket, persist using centralized values
+            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.max(0, currPop - 1), maxPop, Math.max(0, maxPop - (currPop - 1)));
         }
 
         // 6️⃣ Obtener entidad actualizada (población, recursos)
@@ -180,9 +181,11 @@ router.post('/build', async (req, res) => {
 
         // If the building consumes population, increment back (release) one unit to 'poor' bucket
         if (buildingType !== 'house') {
-            // Recompute summary to get latest values
-            const newPopSummary = await populationService.getPopulationSummaryWithClient(client, entity.id);
-            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.min(newPopSummary.max, (newPopSummary.breakdown.poor || 0) + 1), newPopSummary.max, Math.max(0, newPopSummary.max - (Math.min(newPopSummary.max, (newPopSummary.breakdown.poor || 0) + 1))));
+            // Recompute using centralized helper to get latest occupation/available and breakdown
+            const newCalc = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
+            const newBreak = newCalc.breakdown || {};
+            const newMax = newCalc.max || 0;
+            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.min(newMax, (newBreak.poor || 0) + 1), newMax, Math.max(0, newMax - (Math.min(newMax, (newBreak.poor || 0) + 1))));
         }
 
         await client.query('COMMIT');

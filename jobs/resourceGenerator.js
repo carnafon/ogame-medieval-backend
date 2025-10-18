@@ -62,11 +62,12 @@ async function processEntity(entityId, options) {
 
     // Obtener edificios del usuario
     const buildings = await getBuildings(entityId);
-    // cargar populationService antes de usarlo (evita temporal dead zone)
+    // usar populationService centralizado
     const populationService = require('../utils/populationService');
-    // compute occupation once (sum of factorials across buildings)
-    const occupation = populationService.computeOccupationFromBuildings(buildings);
-    const popSummary = await populationService.getPopulationSummaryWithClient(client, entityId);
+    // Obtener resumen poblacional y available dentro de la misma transaccion
+    const popCalc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
+    const popSummary = { total: popCalc.total, max: popCalc.max, breakdown: popCalc.breakdown, available: popCalc.available };
+    const occupation = popCalc.occupation;
     const popStats = calculatePopulationStats(buildings, parseInt(popSummary.total, 10));
     const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
     const maxPopulation = popStats.max_population || entity.max_population || 0;
@@ -264,7 +265,7 @@ async function processEntity(entityId, options) {
             population: {
                 current_population: newPopulation,
                 max_population: maxPopulation,
-                available_population: Math.max(0, newPopulation - require('../utils/populationService').computeOccupationFromBuildings(buildings))
+                available_population: Math.max(0, newPopulation - occupation)
             }
         };
     } catch (err) {

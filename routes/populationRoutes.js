@@ -35,14 +35,14 @@ router.post('/', authenticateToken, async (req, res) => {
       let avail;
       if (Number.isFinite(u.available_population)) {
         avail = u.available_population;
+        await populationService.setPopulationForTypeWithClient(client, entityId, type, cur, max, avail);
       } else {
-        // compute occupation from buildings for this entity and derive available = current - occupation
-        const popUtils = require('../utils/populationService');
-        const bres = await client.query('SELECT type, level, count FROM buildings WHERE entity_id = $1', [entityId]);
-        const occupation = popUtils.computeOccupationFromBuildings(bres.rows || []);
-        avail = Math.max(0, cur - occupation);
+        // Use centralized helper to compute available within the same client/transaction
+        const calc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
+        // derive available for this type based on overall available (we keep same rule: available = current_total - occupation)
+        avail = Math.max(0, cur - calc.occupation);
+        await populationService.setPopulationForTypeWithClient(client, entityId, type, cur, max, avail);
       }
-      await populationService.setPopulationForTypeWithClient(client, entityId, type, cur, max, avail);
     }
     await client.query('COMMIT');
     const summary = await populationService.getPopulationSummary(entityId);

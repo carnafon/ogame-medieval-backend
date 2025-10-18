@@ -156,5 +156,24 @@ async function calculateAvailablePopulation(entityId) {
   }
 }
 
-module.exports = { initPopulations, getPopulationSummary, getPopulationSummaryWithClient, setPopulationForTypeWithClient, POP_TYPES, computeOccupationFromBuildings, calculateAvailablePopulation };
+/**
+ * Client-aware version of calculateAvailablePopulation. Use this when executing inside
+ * an existing transaction to avoid creating nested clients/transactions.
+ * Returns: { entityId, current, occupation, available, breakdown, total, max }
+ */
+async function calculateAvailablePopulationWithClient(client, entityId) {
+  // reuse getPopulationSummaryWithClient to obtain per-type totals and breakdown
+  const pop = await getPopulationSummaryWithClient(client, entityId);
+  const current = pop.total || 0;
+  const max = pop.max || 0;
+  const breakdown = pop.breakdown || {};
+
+  const bres = await client.query('SELECT type, level, count FROM buildings WHERE entity_id = $1', [entityId]);
+  const buildings = Array.isArray(bres.rows) ? bres.rows : [];
+  const occupation = computeOccupationFromBuildings(buildings);
+  const available = Math.max(0, current - occupation);
+  return { entityId, current, occupation, available, breakdown, total: current, max };
+}
+
+module.exports = { initPopulations, getPopulationSummary, getPopulationSummaryWithClient, setPopulationForTypeWithClient, POP_TYPES, computeOccupationFromBuildings, calculateAvailablePopulation, calculateAvailablePopulationWithClient };
 

@@ -11,6 +11,7 @@ const { getBuildings, getBuildingLevel } = require('../utils/buildingsService');
 const pool = require('../db');
 const { calculateProductionForDuration, TICK_SECONDS } = require('../utils/gameUtils');
 const resourcesService = require('../utils/resourcesService');
+const populationService = require('../utils/populationService');
 
 /**
  * Procesa la lógica económica (construcción, producción, comercio) para todas las ciudades IA.
@@ -71,10 +72,10 @@ async function runEconomicUpdate(pool) {
                     if (bestUpgrade) {
                         const reqs = calculateUpgradeRequirements(bestUpgrade, lowestLevel);
                         if (reqs) {
-                            // check population (lock populations and read summary)
+                            // check population (lock populations and read summary) using centralized helper
                             await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
-                            const checkPop = await populationService.getPopulationSummaryWithClient(client, entityId);
-                            const availablePop = checkPop.total || 0;
+                            const calc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
+                            const availablePop = calc.total || 0;
                             const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
                             if (availablePop >= popNeeded) {
                                 // lock and read resource_inventory
