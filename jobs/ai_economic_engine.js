@@ -29,6 +29,7 @@ async function runEconomicUpdate(pool) {
             const entRes = await pool.query('SELECT entity_id FROM ai_cities WHERE id = $1', [ai.id]);
             if (entRes.rows.length === 0 || !entRes.rows[0].entity_id) continue;
             const entityId = entRes.rows[0].entity_id;
+            console.log(`[AI Engine] --- Processing AI city id=${ai.id} -> entity=${entityId}`);
 
             const client = await pool.connect();
             try {
@@ -44,9 +45,12 @@ async function runEconomicUpdate(pool) {
                     const popStats = { current_population: popSummary.total || 0 };
                     const produced = calculateProductionForDuration(buildings, popStats, TICK_SECONDS);
                     if (produced && Object.keys(produced).length > 0) {
+                        console.log(`[AI Engine] entity=${entityId} produced:`, produced);
                         await resourcesService.setResourcesWithClientGeneric(client, entityId, produced);
                         // update the entities.last_resource_update timestamp so other systems can inspect it
                         await client.query('UPDATE entities SET last_resource_update = $1 WHERE id = $2', [now.toISOString(), entityId]);
+                    } else {
+                        console.log(`[AI Engine] entity=${entityId} produced nothing this tick.`);
                     }
                 } catch (prodErr) {
                     console.warn('[AI Engine] Error processing production for entity', entityId, prodErr.message);
@@ -70,6 +74,7 @@ async function runEconomicUpdate(pool) {
                         }
                     }
                     if (bestUpgrade) {
+                        console.log(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
                         const reqs = calculateUpgradeRequirements(bestUpgrade, lowestLevel);
                         if (reqs) {
                             // check population (lock populations and read summary) using centralized helper
@@ -78,6 +83,7 @@ async function runEconomicUpdate(pool) {
                             const availablePop = calc.total || 0;
                             const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
                             if (availablePop >= popNeeded) {
+                                console.log(`[AI Engine] entity=${entityId} has available pop ${availablePop} and needs ${popNeeded} for ${bestUpgrade}`);
                                 // lock and read resource_inventory
                                 const rows = await client.query(
                                     `SELECT rt.name, ri.amount
@@ -95,6 +101,7 @@ async function runEconomicUpdate(pool) {
                                 }
 
                                 if (hasEnough) {
+                                    console.log(`[AI Engine] entity=${entityId} has enough resources for ${bestUpgrade}`);
                                     // Deduct resources
                                     for (const resource in reqs.requiredCost) {
                                         const amount = reqs.requiredCost[resource] || 0;
@@ -134,31 +141,7 @@ async function runEconomicUpdate(pool) {
                         return res.rows || [];
                     }
 
-                    async function computeMarketPrice(client, typeName, amount, action) {
-                        const t = (typeName || '').toString().toLowerCase();
-                        const ptRes = await client.query('SELECT lower(name) as name, price_base FROM resource_types WHERE lower(name) = $1', [t]);
-                        if (!ptRes.rows.length) return null;
-                        const base = Number(ptRes.rows[0].price_base) || 0;
-                        if (!base || base <= 0) return null;
-                        const stockRes = await client.query(
-                            `SELECT COALESCE(SUM(ri.amount),0) as stock
-                             FROM resource_inventory ri
-                             JOIN resource_types rt ON ri.resource_type_id = rt.id
-                             WHERE lower(rt.name) = $1`,
-                            [t]
-                        );
-                        const stockBefore = Number((stockRes.rows[0] && stockRes.rows[0].stock) || 0);
-                        const K_BUY = 0.5, K_SELL = 0.3, MIN_PRICE = 1;
-                        let price = base;
-                        if ((action || 'buy') === 'buy') {
-                            const factor = 1 + K_BUY * (amount / Math.max(1, stockBefore));
-                            price = Math.max(MIN_PRICE, Math.round(base * factor));
-                        } else {
-                            const factor = 1 - K_SELL * (amount / Math.max(1, stockBefore + amount));
-                            price = Math.max(MIN_PRICE, Math.round(base * factor));
-                        }
-                        return { price, base, stockBefore };
-                    }
+                    const marketService = require('../utils/marketService');
 
                     // atomic trade using existing client (mirrors /api/resources/trade)
                     async function execAtomicTradeWithClient(client, buyerId, sellerId, resourceName, pricePerUnit, qty) {
@@ -237,6 +220,7 @@ async function runEconomicUpdate(pool) {
                     const y = entRow.y_coord || 0;
 
                     const nearby = await findNearbyAICities(client, x, y, RADIUS, 8);
+                    console.log(`[AI Engine] entity=${entityId} found ${nearby.length} potential trade partners`);
                     if ((nearby || []).length > 0) {
                         const meRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`, [entityId]);
                         const myResources = Object.fromEntries(meRes.rows.map(r => [r.name, parseInt(r.amount, 10)]));
@@ -254,17 +238,25 @@ async function runEconomicUpdate(pool) {
                                 try {
                                     const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resName]);
                                     const sellerStock = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
+                                    console.log(`[AI Engine] Trade attempt BUY: entity=${entityId} needs ${need} of ${resName}; seller=${nb.id} stock=${sellerStock}`);
                                     if (sellerStock <= SAFETY_STOCK) continue;
                                     const availableToSell = Math.min(need, Math.max(0, sellerStock - SAFETY_STOCK));
                                     if (availableToSell <= 0) continue;
-                                    const mp = await computeMarketPrice(client, resName, availableToSell, 'buy');
-                                    if (!mp) continue;
+                                    const mp = await marketService.computeMarketPriceSingle(client, resName, availableToSell, 'buy');
+                                    if (!mp) {
+                                        console.log(`[AI Engine] computeMarketPriceSingle returned null for ${resName}`);
+                                        continue;
+                                    }
                                     const qty = Math.min(availableToSell, MAX_AMOUNT);
-                                    await execAtomicTradeWithClient(client, entityId, nb.id, resName, mp.price, qty);
-                                    console.log(`[AI Engine][Trade] entity ${entityId} bought ${qty} ${resName} from ${nb.id} at ${mp.price} each`);
-                                    tradesDone++;
+                                    try {
+                                        await marketService.tradeWithClient(client, entityId, nb.id, resName, mp.price, qty);
+                                        console.log(`[AI Engine][Trade] entity ${entityId} bought ${qty} ${resName} from ${nb.id} at ${mp.price} each`);
+                                        tradesDone++;
+                                    } catch (tradeErr) {
+                                        console.warn(`[AI Engine] tradeWithClient failed (buy) entity=${entityId} seller=${nb.id} res=${resName}:`, tradeErr.message);
+                                    }
                                 } catch (tErr) {
-                                    // ignore per-seller failures
+                                    console.warn('[AI Engine] trade loop error (buy):', tErr.message);
                                 }
                             }
                         }
@@ -281,21 +273,27 @@ async function runEconomicUpdate(pool) {
                                     try {
                                         const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resName]);
                                         const neighborAmt = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
+                                        console.log(`[AI Engine] Trade attempt SELL: entity=${entityId} has surplus=${surplus} of ${resName}; neighbor=${nb.id} amt=${neighborAmt}`);
                                         if (neighborAmt >= BUY_LOW) continue;
                                         const wanted = Math.min(MAX_AMOUNT, BUY_LOW - neighborAmt);
                                         const toSell = Math.min(surplus, wanted);
                                         if (toSell <= 0) continue;
-                                        const mp = await computeMarketPrice(client, resName, toSell, 'sell');
+                                        const mp = await marketService.computeMarketPriceSingle(client, resName, toSell, 'sell');
                                         if (!mp) continue;
-                                        await execAtomicTradeWithClient(client, nb.id, entityId, resName, mp.price, toSell);
-                                        console.log(`[AI Engine][Trade] entity ${entityId} sold ${toSell} ${resName} to ${nb.id} at ${mp.price} each`);
-                                        tradesDone++;
+                                        try {
+                                            await marketService.tradeWithClient(client, nb.id, entityId, resName, mp.price, toSell);
+                                            console.log(`[AI Engine][Trade] entity ${entityId} sold ${toSell} ${resName} to ${nb.id} at ${mp.price} each`);
+                                            tradesDone++;
+                                        } catch (tradeErr) {
+                                            console.warn(`[AI Engine] tradeWithClient failed (sell) entity=${entityId} buyer=${nb.id} res=${resName}:`, tradeErr.message);
+                                        }
                                     } catch (tErr) {
-                                        // ignore
+                                        console.warn('[AI Engine] trade loop error (sell):', tErr.message);
                                     }
                                 }
                             }
                         }
+                        console.log(`[AI Engine] entity=${entityId} trading summary: tradesDone=${tradesDone}`);
                     }
                 } catch (tradeErr) {
                     console.warn('[AI Engine] Error during trading phase for entity', entityId, tradeErr.message);

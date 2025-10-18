@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const marketService = require('../utils/marketService');
 
 // GET /api/resources?entityId=ID
 // Devuelve los recursos de la entidad indicada
@@ -97,63 +98,28 @@ router.post('/market-price', async (req, res) => {
       return res.status(400).json({ message: 'Debe enviar un array trades con al menos un elemento.' });
     }
 
-    // Normalize names and unique list
-    const names = Array.from(new Set(trades.map(t => (t.type || '').toString().toLowerCase()))).filter(Boolean);
-    if (names.length === 0) return res.status(400).json({ message: 'No hay tipos de recurso válidos en trades.' });
-
-    // Fetch price_base for each type
-    const ptRes = await pool.query(
-      `SELECT lower(name) as name, price_base FROM resource_types WHERE lower(name) = ANY($1)`,
-      [names]
-    );
-    const baseMap = Object.fromEntries(ptRes.rows.map(r => [r.name, Number(r.price_base) || 0]));
-
-    // Fetch global stock per resource (sum across all inventories)
-    const stockRes = await pool.query(
-      `SELECT lower(rt.name) as name, COALESCE(SUM(ri.amount),0) as stock
-       FROM resource_inventory ri
-       JOIN resource_types rt ON ri.resource_type_id = rt.id
-       WHERE lower(rt.name) = ANY($1)
-       GROUP BY lower(rt.name)`,
-      [names]
-    );
-    const stockMap = Object.fromEntries(stockRes.rows.map(r => [r.name, Number(r.stock) || 0]));
-
-    // Parameters for price formula
-    const K_BUY = 0.5;   // elasticity for buying (market price increases when stock is low)
-    const K_SELL = 0.3;  // elasticity for selling (market pays less when stock is high)
-    const MIN_PRICE = 1; // minimum price
-
-    const results = trades.map(tr => {
+    const results = [];
+    for (const tr of trades) {
       const type = (tr.type || '').toString().toLowerCase();
       const amount = Math.max(0, parseInt(tr.amount || 0, 10));
       const action = (tr.action || 'buy').toString().toLowerCase();
 
-      const base = baseMap[type] || 0;
-      const stockBefore = stockMap[type] || 0;
-
-      if (!base || base <= 0) {
-        return { type, amount, action, base_price: null, price: null, stock_before: stockBefore, stock_after: stockBefore, note: 'missing base price' };
+      if (!type) {
+        results.push({ type, amount, action, base_price: null, price: null, stock_before: null, stock_after: null, note: 'invalid type' });
+        continue;
       }
 
-      // Compute price using simple stock elasticity formula
-      // Buying: player buys from market → price increases with relative amount
-      // Selling: player sells to market → price decreases with relative amount
-      let price = base;
-
-      if (action === 'buy') {
-        // price increases proportionally to amount / (stock + 1)
-        const factor = 1 + K_BUY * (amount / Math.max(1, stockBefore));
-        price = Math.max(MIN_PRICE, Math.round(base * factor));
-      } else {
-        // sell
-        const factor = 1 - K_SELL * (amount / Math.max(1, stockBefore + amount));
-        price = Math.max(MIN_PRICE, Math.round(base * factor));
+      // Use marketService to compute price and stock
+      const mp = await marketService.computeMarketPriceSingle(pool, type, amount, action);
+      if (!mp) {
+        // missing base price or unknown resource
+        results.push({ type, amount, action, base_price: null, price: null, stock_before: null, stock_after: null, note: 'missing base price or unknown resource' });
+        continue;
       }
 
-      const stockAfter = action === 'buy' ? Math.max(0, stockBefore - amount) : stockBefore + amount;
-      return { type, amount, action, base_price: base, price, stock_before: stockBefore, stock_after: stockAfter };
-    });
+      const stockAfter = action === 'buy' ? Math.max(0, mp.stockBefore - amount) : mp.stockBefore + amount;
+      results.push({ type, amount, action, base_price: mp.base, price: mp.price, stock_before: mp.stockBefore, stock_after });
+    }
 
     res.json({ results });
   } catch (err) {
