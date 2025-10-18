@@ -89,15 +89,37 @@ async function runEconomicUpdate(pool) {
                     // choose building with lowest level using the same building list as normal players
                     let bestUpgrade = null;
                     let lowestLevel = Infinity;
-                    for (const buildingId of Object.keys(BUILDING_COSTS)) {
-                        const currentLevel = runtimeBuildings[buildingId] || 0;
-                        if (currentLevel < lowestLevel) {
-                            lowestLevel = currentLevel;
-                            bestUpgrade = buildingId;
+
+                    // Load current resources (light read, no FOR UPDATE) to let AI prefer food buildings when starving
+                    let currentResourcesLight = {};
+                    try {
+                        const rr = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND rt.name IN ('wood','stone','food')`, [entityId]);
+                        currentResourcesLight = Object.fromEntries(rr.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+                    } catch (e) {
+                        currentResourcesLight = {};
+                    }
+
+                    // If production for food this tick was negative or food stock is low, prefer to build a farm if present
+                    const foodProduced = (typeof produced === 'object' && typeof produced.food === 'number') ? produced.food : 0;
+                    const FOOD_LOW_THRESHOLD = 20;
+                    if ((foodProduced < 0 || (currentResourcesLight.food || 0) < FOOD_LOW_THRESHOLD) && BUILDING_COSTS['farm']) {
+                        bestUpgrade = 'farm';
+                        lowestLevel = runtimeBuildings['farm'] || 0;
+                    }
+
+                    // Fallback: choose the globally lowest-level building
+                    if (!bestUpgrade) {
+                        for (const buildingId of Object.keys(BUILDING_COSTS)) {
+                            const currentLevel = runtimeBuildings[buildingId] || 0;
+                            if (currentLevel < lowestLevel) {
+                                lowestLevel = currentLevel;
+                                bestUpgrade = buildingId;
+                            }
                         }
                     }
                     if (bestUpgrade) {
                         console.log(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
+                        console.log(`[AI Engine] entity=${entityId} foodProduced=${foodProduced} currentResourcesLight=`, currentResourcesLight);
                         const reqs = calculateUpgradeRequirementsFromConstants(bestUpgrade, lowestLevel);
                         console.log(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
                         if (reqs) {
