@@ -98,6 +98,13 @@ const RESOURCE_GENERATOR_INTERVAL_SECONDS = 10; // intervalo de ejecución del j
 const RESOURCE_GENERATOR_WOOD_PER_TICK = 2; // suma fija de madera por tick
 const RESOURCE_GENERATOR_STONE_PER_TICK = 1; // suma fija de piedra por tick
 
+// Resource category mapping (lowercase keys)
+const RESOURCE_CATEGORIES = {
+    wood: 'common', stone: 'common', food: 'common', water: 'common', clay: 'common', leather: 'common', coal: 'common', copper: 'common', wool: 'common', honey: 'common',
+    lumber: 'processed', tools: 'processed', iron_ingot: 'processed', beer: 'processed', baked_brick: 'processed', textile: 'processed', silk_cloth: 'processed', salted: 'processed', refined_clay: 'processed', books: 'processed', purple_dye: 'processed',
+    spice: 'specialized', damascus_steel: 'specialized', preservation_elixir: 'specialized', explosive_compound: 'specialized', royal_dye: 'specialized', illustrated_parchment: 'specialized', magic_catalyst: 'specialized'
+};
+
 
 // -----------------------------------------------------------------
 // ⭐️ FUNCIONES AUXILIARES
@@ -268,5 +275,6 @@ module.exports = {
     MAP_SIZE,
     COORD_RADIUS, // Exportamos el radio de influencia
     findAvailableCoordinates,
-    PROCESSING_RECIPES
+    PROCESSING_RECIPES,
+    RESOURCE_CATEGORIES
 };

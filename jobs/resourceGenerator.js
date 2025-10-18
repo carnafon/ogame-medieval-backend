@@ -85,6 +85,83 @@ async function processEntity(entityId, options) {
             let produced = accrued || {};
             const newResources = { ...currentResources };
 
+            // --- Consumo de recursos por población (se ejecuta antes de la producción) ---
+            const resourcesService = require('../utils/resourcesService');
+            const { RESOURCE_CATEGORIES } = require('../utils/gameUtils');
+            // fetch all resource types and partition by category
+            const allTypes = await resourcesService.getResourceTypeNames(client);
+            const COMMON_RES = [];
+            const PROCESSED_RES = [];
+            const SPECIAL_RES = [];
+            allTypes.forEach(name => {
+                const cat = (RESOURCE_CATEGORIES[name] || 'common').toLowerCase();
+                if (cat === 'common') COMMON_RES.push(name);
+                else if (cat === 'processed') PROCESSED_RES.push(name);
+                else if (cat === 'specialized' || cat === 'special') SPECIAL_RES.push(name);
+            });
+
+            // Load per-type population rows so we have current and max per type
+            const popRows = await client.query('SELECT type, current_population, max_population FROM populations WHERE entity_id = $1', [entityId]);
+            const popMap = {};
+            popRows.rows.forEach(r => {
+                popMap[(r.type || '').toLowerCase()] = {
+                    current: Number(r.current_population) || 0,
+                    max: Number(r.max_population) || 0
+                };
+            });
+
+            const populationService = require('../utils/populationService');
+
+            const tryConsumeForType = (typeKey, resourceKeys) => {
+                const cur = popMap[typeKey]?.current || 0;
+                const max = popMap[typeKey]?.max || 0;
+                if (cur <= 0) return { newCurrent: cur, max };
+
+                const required = cur; // each citizen consumes 1 unit of each listed resource
+                const allHave = resourceKeys.every(k => (newResources[k] || 0) >= required);
+                if (!allHave) {
+                    // Not enough: decrement population by 1
+                    const newCur = Math.max(0, cur - 1);
+                    return { newCurrent: newCur, max };
+                }
+
+                // Consume resources
+                resourceKeys.forEach(k => {
+                    newResources[k] = Math.max(0, (newResources[k] || 0) - required);
+                });
+
+                // If there is spare capacity (max - cur > 0) then population increases by 1
+                let newCur = cur;
+                if ((max - cur) > 0) newCur = Math.min(max, cur + 1);
+                return { newCurrent: newCur, max };
+            };
+
+            const poorRes = tryConsumeForType('poor', COMMON_RES);
+            const burgessRes = tryConsumeForType('burgess', PROCESSED_RES);
+            const patricianRes = tryConsumeForType('patrician', SPECIAL_RES);
+
+            // Persist updated population rows for each type
+            try {
+                if (poorRes.newCurrent !== undefined) {
+                    const avail = Math.max(0, (poorRes.max || 0) - poorRes.newCurrent);
+                    await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', poorRes.newCurrent, poorRes.max || 0, avail);
+                    // update local popMap as well
+                    popMap.poor = { current: poorRes.newCurrent, max: poorRes.max || 0 };
+                }
+                if (burgessRes.newCurrent !== undefined) {
+                    const avail = Math.max(0, (burgessRes.max || 0) - burgessRes.newCurrent);
+                    await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', burgessRes.newCurrent, burgessRes.max || 0, avail);
+                    popMap.burgess = { current: burgessRes.newCurrent, max: burgessRes.max || 0 };
+                }
+                if (patricianRes.newCurrent !== undefined) {
+                    const avail = Math.max(0, (patricianRes.max || 0) - patricianRes.newCurrent);
+                    await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', patricianRes.newCurrent, patricianRes.max || 0, avail);
+                    popMap.patrician = { current: patricianRes.newCurrent, max: patricianRes.max || 0 };
+                }
+            } catch (pErr) {
+                console.warn('Failed to persist population type updates:', pErr.message);
+            }
+
             // Procesamiento con recetas: si un recurso producido es de tipo processed
             // y tiene una receta, comprobamos si hay insumos suficientes. Solo
             // producimos la cantidad de unidades que puedan cubrirse con insumos.

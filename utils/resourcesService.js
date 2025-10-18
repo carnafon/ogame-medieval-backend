@@ -96,6 +96,16 @@ async function setResourcesWithClientGeneric(client, entityId, resources) {
   return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
 }
 
+// Return all resource type names as an array, client-aware
+async function getResourceTypeNames(client = null) {
+  if (client && client.query) {
+    const res = await client.query('SELECT name FROM resource_types ORDER BY id');
+    return res.rows.map(r => (r.name || '').toLowerCase());
+  }
+  const res = await pool.query('SELECT name FROM resource_types ORDER BY id');
+  return res.rows.map(r => (r.name || '').toLowerCase());
+}
+
 // Consume (subtract) costs atomically. costs: { wood, stone, food }
 // Returns updated resources or throws Error('Recursos insuficientes')
 async function consumeResources(entityId, costs) {
@@ -223,3 +233,5 @@ module.exports = {
 };
 // Export the generic setter as well
 module.exports.setResourcesWithClientGeneric = setResourcesWithClientGeneric;
+// Export resource type helper
+module.exports.getResourceTypeNames = getResourceTypeNames;
