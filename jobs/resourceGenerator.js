@@ -26,7 +26,7 @@ async function processEntity(entityId, options) {
 
             // 🔹 Obtener datos base de la entidad (lock solo la fila de entities para evitar FOR UPDATE en outer join)
             const entityRes = await client.query(
-                `SELECT id, type, current_population, last_resource_update, faction_id, x_coord, y_coord, max_population
+              `SELECT id, type, last_resource_update, faction_id, x_coord, y_coord
                  FROM entities
                  WHERE id = $1
                  FOR UPDATE`,
