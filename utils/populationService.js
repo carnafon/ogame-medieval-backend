@@ -143,7 +143,7 @@ async function calculateAvailablePopulation(entityId) {
     const current = pop.total || 0;
 
     // get buildings for entity
-    const bres = await client.query('SELECT type, level, count FROM buildings WHERE entity_id = $1', [entityId]);
+  const bres = await client.query(`SELECT type, MAX(level) AS level, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type`, [entityId]);
     const buildings = Array.isArray(bres.rows) ? bres.rows : [];
 
     const occupation = computeOccupationFromBuildings(buildings);
@@ -168,7 +168,7 @@ async function calculateAvailablePopulationWithClient(client, entityId) {
   const max = pop.max || 0;
   const breakdown = pop.breakdown || {};
 
-  const bres = await client.query('SELECT type, level, count FROM buildings WHERE entity_id = $1', [entityId]);
+  const bres = await client.query(`SELECT type, MAX(level) AS level, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type`, [entityId]);
   const buildings = Array.isArray(bres.rows) ? bres.rows : [];
   const occupation = computeOccupationFromBuildings(buildings);
   const available = Math.max(0, current - occupation);
