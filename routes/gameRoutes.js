@@ -86,14 +86,16 @@ router.post('/build', async (req, res) => {
                 const currPop = popCalc.total || 0;
                 const maxPop = popCalc.max || 0;
 
-                if (buildingType !== 'house') {
+                // Determine per-building population need
+                const popNeeded = BUILDING_COSTS[buildingType] && typeof BUILDING_COSTS[buildingType].popNeeded === 'number' ? BUILDING_COSTS[buildingType].popNeeded : (buildingType === 'house' ? 0 : 1);
+                if ((popNeeded || 0) > 0) {
                     const available = popCalc.available || 0;
-                    if (available <= 0) {
+                    if (available < popNeeded) {
                         await client.query('ROLLBACK');
                         return res.status(400).json({
                             message: 'Población insuficiente para asignar al edificio.',
                             code: 'INSUFFICIENT_POPULATION',
-                            need: 1,
+                            need: popNeeded,
                             have: available
                         });
                     }
@@ -265,7 +267,7 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
             targetEntityId = er.rows[0].id;
         }
 
-        const costBase = BUILDING_COSTS[buildingType];
+    const costBase = BUILDING_COSTS[buildingType];
         if (!costBase) return res.status(400).json({ message: 'Tipo de edificio no válido.' });
 
         // Find current level
@@ -283,6 +285,23 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
 
         const canBuild = (resources.wood || 0) >= cost.wood && (resources.stone || 0) >= cost.stone && (resources.food || 0) >= cost.food;
 
+        // Determine population requirement for this building
+        const popNeeded = typeof costBase.popNeeded === 'number' ? costBase.popNeeded : (buildingType === 'house' ? 0 : 1);
+        // Compute available population for the target entity
+        const populationService = require('../utils/populationService');
+        let popInfo = { entityId: targetEntityId, current: 0, occupation: 0, available: 0 };
+        try {
+            // Use a short-lived client to compute availability
+            const client = await pool.connect();
+            try {
+                popInfo = await populationService.calculateAvailablePopulationWithClient(client, targetEntityId);
+            } finally {
+                client.release();
+            }
+        } catch (e) {
+            console.warn('Failed to compute population availability for build/cost:', e.message);
+        }
+
         // Determine faction and whether this building is allowed
         let factionName = null;
         try {
@@ -298,7 +317,8 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
             if (Array.isArray(allowedList)) allowed = allowedList.includes(buildingType);
         }
 
-        return res.status(200).json({ buildingType, entityId: targetEntityId, cost, resources, canBuild, allowed, faction: factionName });
+    // Include population requirement and availability in response
+    return res.status(200).json({ buildingType, entityId: targetEntityId, cost, resources, canBuild, allowed, faction: factionName, popNeeded, popAvailable: popInfo.available, popCurrent: popInfo.current, popOccupation: popInfo.occupation });
     } catch (err) {
         console.error('Error en build/cost:', err.message);
         return res.status(500).json({ message: 'Error al calcular coste.' });
