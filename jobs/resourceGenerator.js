@@ -208,8 +208,10 @@ async function processEntity(entityId, options) {
             newResources.wood = (newResources.wood || 0) + extraWood;
             newResources.stone = (newResources.stone || 0) + extraStone;
 
-            // Asegurar no negativos para recursos sensibles (ej: food)
-            if (typeof newResources.food === 'number') newResources.food = Math.max(0, newResources.food);
+            // Asegurar que ningún recurso sea negativo (clamp a 0)
+            Object.keys(newResources).forEach(k => {
+                if (typeof newResources[k] === 'number') newResources[k] = Math.max(0, newResources[k]);
+            });
 
             // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
             // Reutilizamos setResourcesWithClient (que actualmente solo actualiza wood/stone/food)

@@ -16,19 +16,19 @@ async function setResources(entityId, resources) {
     await client.query('BEGIN');
     if (typeof resources.wood === 'number') {
       await client.query(
-        `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='wood')`,
+        `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='wood')`,
         [resources.wood, entityId]
       );
     }
     if (typeof resources.stone === 'number') {
       await client.query(
-        `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='stone')`,
+        `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='stone')`,
         [resources.stone, entityId]
       );
     }
     if (typeof resources.food === 'number') {
       await client.query(
-        `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='food')`,
+        `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='food')`,
         [resources.food, entityId]
       );
     }
@@ -50,19 +50,19 @@ async function setResources(entityId, resources) {
 async function setResourcesWithClient(client, entityId, resources) {
   if (typeof resources.wood === 'number') {
     await client.query(
-      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='wood')`,
+      `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='wood')`,
       [resources.wood, entityId]
     );
   }
   if (typeof resources.stone === 'number') {
     await client.query(
-      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='stone')`,
+      `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='stone')`,
       [resources.stone, entityId]
     );
   }
   if (typeof resources.food === 'number') {
     await client.query(
-      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='food')`,
+      `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name='food')`,
       [resources.food, entityId]
     );
   }
@@ -84,7 +84,7 @@ async function setResourcesWithClientGeneric(client, entityId, resources) {
     if (!Object.prototype.hasOwnProperty.call(nameToId, key)) continue; // ignore unknown resource keys
     // Upsert pattern: update existing row
     await client.query(
-      `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = $3`,
+      `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = $3`,
       [value, entityId, nameToId[key]]
     );
   }

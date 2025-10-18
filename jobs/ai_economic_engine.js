@@ -76,6 +76,7 @@ async function runEconomicUpdate(pool) {
                     if (bestUpgrade) {
                         console.log(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
                         const reqs = calculateUpgradeRequirements(bestUpgrade, lowestLevel);
+                        console.log(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
                         if (reqs) {
                             // check population (lock populations and read summary) using centralized helper
                             await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
@@ -94,10 +95,18 @@ async function runEconomicUpdate(pool) {
                                     [entityId]
                                 );
                                 const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+                                console.log(`[AI Engine] entity=${entityId} current resources:`, currentResources);
 
                                 let hasEnough = true;
+                                const missing = {};
                                 for (const resource in reqs.requiredCost) {
-                                    if ((currentResources[resource] || 0) < reqs.requiredCost[resource]) { hasEnough = false; break; }
+                                    const needAmt = reqs.requiredCost[resource] || 0;
+                                    const haveAmt = currentResources[resource] || 0;
+                                    if (haveAmt < needAmt) { hasEnough = false; missing[resource] = { need: needAmt, have: haveAmt }; }
+                                }
+
+                                if (!hasEnough) {
+                                    console.log(`[AI Engine] entity=${entityId} lacks resources for ${bestUpgrade}:`, missing);
                                 }
 
                                 if (hasEnough) {
