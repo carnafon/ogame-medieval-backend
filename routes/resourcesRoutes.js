@@ -87,5 +87,81 @@ router.get('/types', async (req, res) => {
   }
 });
 
+// POST /api/resources/market-price
+// Body: { trades: [{ type: 'wood', amount: 10, action: 'buy'|'sell' }, ...] }
+// Returns computed market price per trade based on global stock and price_base.
+router.post('/market-price', async (req, res) => {
+  try {
+    const { trades } = req.body || {};
+    if (!Array.isArray(trades) || trades.length === 0) {
+      return res.status(400).json({ message: 'Debe enviar un array trades con al menos un elemento.' });
+    }
+
+    // Normalize names and unique list
+    const names = Array.from(new Set(trades.map(t => (t.type || '').toString().toLowerCase()))).filter(Boolean);
+    if (names.length === 0) return res.status(400).json({ message: 'No hay tipos de recurso válidos en trades.' });
+
+    // Fetch price_base for each type
+    const ptRes = await pool.query(
+      `SELECT lower(name) as name, price_base FROM resource_types WHERE lower(name) = ANY($1)`,
+      [names]
+    );
+    const baseMap = Object.fromEntries(ptRes.rows.map(r => [r.name, Number(r.price_base) || 0]));
+
+    // Fetch global stock per resource (sum across all inventories)
+    const stockRes = await pool.query(
+      `SELECT lower(rt.name) as name, COALESCE(SUM(ri.amount),0) as stock
+       FROM resource_inventory ri
+       JOIN resource_types rt ON ri.resource_type_id = rt.id
+       WHERE lower(rt.name) = ANY($1)
+       GROUP BY lower(rt.name)`,
+      [names]
+    );
+    const stockMap = Object.fromEntries(stockRes.rows.map(r => [r.name, Number(r.stock) || 0]));
+
+    // Parameters for price formula
+    const K_BUY = 0.5;   // elasticity for buying (market price increases when stock is low)
+    const K_SELL = 0.3;  // elasticity for selling (market pays less when stock is high)
+    const MIN_PRICE = 1; // minimum price
+
+    const results = trades.map(tr => {
+      const type = (tr.type || '').toString().toLowerCase();
+      const amount = Math.max(0, parseInt(tr.amount || 0, 10));
+      const action = (tr.action || 'buy').toString().toLowerCase();
+
+      const base = baseMap[type] || 0;
+      const stockBefore = stockMap[type] || 0;
+
+      if (!base || base <= 0) {
+        return { type, amount, action, base_price: null, price: null, stock_before: stockBefore, stock_after: stockBefore, note: 'missing base price' };
+      }
+
+      // Compute price using simple stock elasticity formula
+      // Buying: player buys from market → price increases with relative amount
+      // Selling: player sells to market → price decreases with relative amount
+      let price = base;
+
+      if (action === 'buy') {
+        // price increases proportionally to amount / (stock + 1)
+        const factor = 1 + K_BUY * (amount / Math.max(1, stockBefore));
+        price = Math.max(MIN_PRICE, Math.round(base * factor));
+      } else {
+        // sell
+        const factor = 1 - K_SELL * (amount / Math.max(1, stockBefore + amount));
+        price = Math.max(MIN_PRICE, Math.round(base * factor));
+      }
+
+      const stockAfter = action === 'buy' ? Math.max(0, stockBefore - amount) : stockBefore + amount;
+      return { type, amount, action, base_price: base, price, stock_before: stockBefore, stock_after: stockAfter };
+    });
+
+    res.json({ results });
+  } catch (err) {
+    console.error('Error computing market prices:', err.message);
+    res.status(500).json({ message: 'Error computing market prices.', error: err.message });
+  }
+});
+
 module.exports = router;
+
 
