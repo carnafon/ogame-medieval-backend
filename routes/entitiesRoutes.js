@@ -3,6 +3,8 @@ const router = express.Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const { getResources, setResourcesWithClient } = require('../utils/resourcesService');
+const { getBuildings } = require('../utils/buildingsService');
+const populationService = require('../utils/populationService');
 
 /* ======================================================
    ENTIDADES (jugadores, IA, NPCs, etc.)
@@ -33,9 +35,10 @@ router.get('/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
-      `SELECT e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord, e.population, f.name AS faction_name
+      `SELECT e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord, e.population, f.name AS faction_name, u.username
        FROM entities e
        LEFT JOIN factions f ON f.id = e.faction_id
+       LEFT JOIN users u ON u.id = e.user_id
        WHERE e.id = $1`,
       [id]
     );
@@ -44,7 +47,29 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Entidad no encontrada' });
     }
 
-    res.status(200).json(result.rows[0]);
+    const entity = result.rows[0];
+
+    // gather resources, buildings and population summary using helpers
+    const resources = await getResources(id);
+    let buildings = [];
+    try {
+      buildings = await getBuildings(id);
+    } catch (bErr) {
+      console.warn('No buildings available or error reading buildings for entity', id, bErr.message);
+    }
+    const popSummary = await populationService.getPopulationSummary(id);
+
+    res.status(200).json({
+      ...entity,
+      resources: Object.keys(resources).map(name => ({ name, amount: resources[name] })),
+      buildings,
+      population: {
+        current_population: popSummary.total || 0,
+        max_population: popSummary.max || 0,
+        available_population: popSummary.available || 0,
+        breakdown: popSummary.breakdown || {}
+      }
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Error obteniendo entidad', error: err.message });
