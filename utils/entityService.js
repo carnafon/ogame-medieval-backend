@@ -24,9 +24,9 @@ async function createEntityWithResources(clientOrPool, data) {
 
   const client = clientOrPool;
   const resEnt = await client.query(
-    `INSERT INTO entities (user_id, type, faction_id, x_coord, y_coord, current_population, last_resource_update)
-     VALUES ($1,$2,$3,$4,$5,$6,NOW()) RETURNING id, x_coord, y_coord, current_population, last_resource_update, faction_id`,
-    [data.user_id || null, data.type || 'player', data.faction_id || null, data.x_coord || 0, data.y_coord || 0, data.population || 0]
+    `INSERT INTO entities (user_id, type, faction_id, x_coord, y_coord, last_resource_update)
+     VALUES ($1,$2,$3,$4,$5,NOW()) RETURNING id, x_coord, y_coord, last_resource_update, faction_id`,
+    [data.user_id || null, data.type || 'player', data.faction_id || null, data.x_coord || 0, data.y_coord || 0]
   );
   const entity = resEnt.rows[0];
 
@@ -37,6 +37,16 @@ async function createEntityWithResources(clientOrPool, data) {
     const name = (r.name || '').toLowerCase();
     const amount = typeof initial[name] === 'number' ? initial[name] : 0;
     await client.query('INSERT INTO resource_inventory (entity_id, resource_type_id, amount) VALUES ($1,$2,$3)', [entity.id, r.id, amount]);
+  }
+
+  // Initialize populations (three types) for the entity: poor, burgess, patrician
+  try {
+    const populationService = require('./populationService');
+    const popAmount = typeof data.population === 'number' ? data.population : 0;
+    const dist = { poor: popAmount, burgess: 0, patrician: 0 };
+    await populationService.initPopulations(client, entity.id, dist);
+  } catch (popErr) {
+    console.warn('Failed to initialize populations for entity:', popErr.message);
   }
 
   return entity;

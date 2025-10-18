@@ -94,6 +94,10 @@ app.use('/api/entities', entitiesBuildingsRoutes);
 const resourcesRoutes = require('./routes/resourcesRoutes');
 app.use('/api/resources', resourcesRoutes);
 
+// rutas de población
+const populationRoutes = require('./routes/populationRoutes');
+app.use('/api/population', populationRoutes);
+
 
 
 

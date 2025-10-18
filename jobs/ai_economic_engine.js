@@ -36,10 +36,11 @@ async function runEconomicUpdate(pool) {
                 // Compute production based on buildings and persist produced amounts to resource_inventory
                 try {
                     const buildings = await getBuildings(entityId);
-                    // Load population from entities table (current_population)
-                    const entRow = await client.query('SELECT current_population FROM entities WHERE id = $1 FOR UPDATE', [entityId]);
-                    const population = entRow.rows.length > 0 ? parseInt(entRow.rows[0].current_population || 0, 10) : 0;
-                    const popStats = { current_population: population };
+                    // Load population from populations table (lock rows first)
+                    await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
+                    const populationService = require('../utils/populationService');
+                    const popSummary = await populationService.getPopulationSummaryWithClient(client, entityId);
+                    const popStats = { current_population: popSummary.total || 0 };
                     const produced = calculateProductionForDuration(buildings, popStats, TICK_SECONDS);
                     if (produced && Object.keys(produced).length > 0) {
                         await resourcesService.setResourcesWithClientGeneric(client, entityId, produced);
@@ -70,9 +71,10 @@ async function runEconomicUpdate(pool) {
                     if (bestUpgrade) {
                         const reqs = calculateUpgradeRequirements(bestUpgrade, lowestLevel);
                         if (reqs) {
-                            // check population
-                            const entityRow = await client.query('SELECT current_population FROM entities WHERE id = $1 FOR UPDATE', [entityId]);
-                            const availablePop = entityRow.rows.length > 0 ? parseInt(entityRow.rows[0].current_population || 0, 10) : 0;
+                            // check population (lock populations and read summary)
+                            await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
+                            const checkPop = await populationService.getPopulationSummaryWithClient(client, entityId);
+                            const availablePop = checkPop.total || 0;
                             const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
                             if (availablePop >= popNeeded) {
                                 // lock and read resource_inventory

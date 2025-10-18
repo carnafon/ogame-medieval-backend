@@ -153,7 +153,9 @@ router.post('/login', async (req, res) => {
 
     const buildingsList = await getBuildings(entity.id);
 
-        const populationStats = calculatePopulationStats(buildingsList, parseInt(entity.current_population, 10));
+  const populationService = require('../utils/populationService');
+  const popSummary = await populationService.getPopulationSummary(entity.id);
+  const populationStats = calculatePopulationStats(buildingsList, parseInt(popSummary.total || 0, 10));
 
         const token = createToken(user.id, user.username);
 
@@ -183,7 +185,7 @@ router.get('/me', authenticateToken, async (req, res) => {
 
  // 1️⃣ Buscar la entidad asociada al usuario
     const entityResult = await pool.query(
-      `SELECT e.id, e.type, e.x_coord, e.y_coord, e.current_population, e.faction_id,
+      `SELECT e.id, e.type, e.x_coord, e.y_coord, e.faction_id,
               f.name AS faction_name
        FROM entities e
        LEFT JOIN factions f ON f.id = e.faction_id
@@ -238,14 +240,15 @@ router.get('/me', authenticateToken, async (req, res) => {
     x_coord: entity.x_coord,
     y_coord: entity.y_coord,
     resources,  // aquí sí incluyes los recursos
-    current_population: entity.current_population || 0,
-    max_population: entity.max_population || 0, // o calcula según edificios
+  // population comes from the populations table
+  current_population: popSummary.total || 0,
+  max_population: popSummary.max || 0, // o calcula según edificios
   },
   buildings,
   population: {
-    current_population: entity.current_population || 0,
-    max_population: entity.max_population || 0,
-    available_population: (entity.max_population || 0) - (entity.current_population || 0),
+  current_population: popSummary.total || 0,
+  max_population: popSummary.max || 0,
+  available_population: popSummary.available || 0,
   },
 });
 

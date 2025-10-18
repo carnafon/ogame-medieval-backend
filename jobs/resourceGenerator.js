@@ -64,7 +64,9 @@ async function processEntity(entityId, options) {
         const buildings = await getBuildings(entityId);
 
     // Calcular población y producción acumulada
-    const popStats = calculatePopulationStats(buildings, parseInt(entity.current_population, 10));
+    const populationService = require('../utils/populationService');
+    const popSummary = await populationService.getPopulationSummaryWithClient(client, entityId);
+    const popStats = calculatePopulationStats(buildings, parseInt(popSummary.total, 10));
     const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
     const maxPopulation = popStats.max_population || entity.max_population || 0;
 
@@ -148,14 +150,23 @@ async function processEntity(entityId, options) {
         }
 
         // Persistir cambios y actualizar last_resource_update
-      await client.query(
-      `
-      UPDATE entities
-      SET current_population = $1, last_resource_update = $2
-      WHERE id = $3
-      `,
-      [newPopulation, now.toISOString(), entityId]
-    );
+            // Persist new population into populations table (we'll update the 'poor' bucket as a simple default)
+            try {
+                const totalMax = popSummary.max || popSummary.total || 0;
+                const available = Math.max(0, totalMax - newPopulation);
+                // update 'poor' current_population and recompute available_population for that type
+                await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', newPopulation, totalMax, available);
+            } catch (pErr) {
+                console.warn('Failed to persist population to populations table:', pErr.message);
+            }
+
+            // Update last_resource_update in entities
+            await client.query(
+                `UPDATE entities
+                 SET last_resource_update = $1
+                 WHERE id = $2`,
+                [now.toISOString(), entityId]
+            );
 
         await client.query('COMMIT');
 

@@ -47,10 +47,7 @@ router.post('/build', async (req, res) => {
 
                 // Check population availability for non-house buildings
                 // Lock the entity row to avoid races when modifying population
-                const entRow = await client.query(
-                    'SELECT current_population, max_population, faction_id FROM entities WHERE id = $1 FOR UPDATE',
-                    [entity.id]
-                );
+                const entRow = await client.query('SELECT faction_id FROM entities WHERE id = $1 FOR UPDATE', [entity.id]);
                 if (entRow.rows.length === 0) {
                     await client.query('ROLLBACK');
                     return res.status(404).json({ message: 'Entidad no encontrada.' });
@@ -83,8 +80,10 @@ router.post('/build', async (req, res) => {
                 }
                 // In this project `max_population` is the capacity and
                 // `current_population` is the available (free) population.
-                const currPop = parseInt(entRow.rows[0].current_population || 0, 10);
-                const maxPop = parseInt(entRow.rows[0].max_population || 0, 10);
+                const populationService = require('../utils/populationService');
+                const popSummary = await populationService.getPopulationSummaryWithClient(client, entity.id);
+                const currPop = popSummary.total || 0;
+                const maxPop = popSummary.max || 0;
 
                 if (buildingType !== 'house') {
                     // available free population is stored in current_population
@@ -158,19 +157,13 @@ router.post('/build', async (req, res) => {
         const updatedBuildings = await getBuildings(entity.id);
 
 
-        // If the building consumes population, decrement current_population now (within the same transaction)
+        // If the building consumes population, decrement one unit from the 'poor' bucket by default
         if (buildingType !== 'house') {
-            await client.query(
-                'UPDATE entities SET current_population = current_population - 1 WHERE id = $1',
-                [entity.id]
-            );
+            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.max(0, currPop - 1), popSummary.max, Math.max(0, popSummary.max - (currPop - 1)));
         }
 
         // 6️⃣ Obtener entidad actualizada (población, recursos)
-        const updatedEntityRes = await client.query(
-            'SELECT id, current_population, max_population, faction_id, x_coord, y_coord FROM entities WHERE id = $1',
-            [entity.id]
-        );
+        const updatedEntityRes = await client.query('SELECT id, faction_id, x_coord, y_coord FROM entities WHERE id = $1', [entity.id]);
         const updatedEntity = updatedEntityRes.rows[0];
 
         // Obtener recursos actualizados
@@ -185,12 +178,11 @@ router.post('/build', async (req, res) => {
             updatedResourcesRes.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)])
         );
 
-        // If the building consumes population, increment current_population now (within the same transaction)
+        // If the building consumes population, increment back (release) one unit to 'poor' bucket
         if (buildingType !== 'house') {
-            await client.query(
-                'UPDATE entities SET current_population = current_population + 1 WHERE id = $1',
-                [entity.id]
-            );
+            // Recompute summary to get latest values
+            const newPopSummary = await populationService.getPopulationSummaryWithClient(client, entity.id);
+            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.min(newPopSummary.max, (newPopSummary.breakdown.poor || 0) + 1), newPopSummary.max, Math.max(0, newPopSummary.max - (Math.min(newPopSummary.max, (newPopSummary.breakdown.poor || 0) + 1))));
         }
 
         await client.query('COMMIT');
@@ -203,15 +195,15 @@ router.post('/build', async (req, res) => {
                 faction_id: updatedEntity.faction_id,
                 x_coord: updatedEntity.x_coord,
                 y_coord: updatedEntity.y_coord,
-                current_population: updatedEntity.current_population,
-                max_population: updatedEntity.max_population,
+                current_population: popSummary.total,
+                max_population: popSummary.max,
                 resources: updatedResources
             },
             buildings: updatedBuildings.rows,
             population: {
-                current_population: updatedEntity.current_population,
-                max_population: updatedEntity.max_population,
-                available_population: updatedEntity.max_population - updatedEntity.current_population
+                current_population: popSummary.total,
+                max_population: popSummary.max,
+                available_population: popSummary.available
             }
         });
 
@@ -323,8 +315,9 @@ router.get('/map', authenticateToken, async (req, res) => {
     e.y_coord,
     e.user_id,
     e.faction_id,
-    e.current_population,
-    e.max_population,
+    -- population: aggregate current and max across population types
+    SUM(COALESCE(p.current_population,0)) AS current_population,
+    SUM(COALESCE(p.max_population,0)) AS max_population,
     f.name AS faction_name, 
     -- Recursos en columnas separadas
     SUM(CASE WHEN rt.name = 'wood' THEN ri.amount ELSE 0 END) AS wood,
@@ -336,6 +329,7 @@ FROM entities e
 LEFT JOIN users u ON u.id = e.user_id
 LEFT JOIN ai_cities ac ON ac.entity_id = e.id
 LEFT JOIN factions f ON e.faction_id = f.id
+LEFT JOIN populations p ON e.id = p.entity_id
 JOIN resource_inventory ri ON e.id = ri.entity_id
 JOIN resource_types rt ON ri.resource_type_id = rt.id
 LEFT JOIN buildings b ON e.id = b.entity_id
