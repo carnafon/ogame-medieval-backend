@@ -45,21 +45,37 @@ app.post('/api/run-scheduled-job', async (req, res) => {
         return res.status(401).json({ message: 'Acceso denegado. Secreto incorrecto.' });
     }
     
-    // 2. Ejecutar la Tarea
-    console.log(`[WEB-CRON] Iniciando tarea de generación de recursos a las ${new Date().toISOString()}`);
-    try {
-        // La función runResourceGeneratorJob (del archivo jobs/resourceGenerator.js)
-        // se encargará de toda la lógica de cálculo de recursos para los jugadores.
-        await runResourceGeneratorJob();
-        
-        console.log('[WEB-CRON] Tarea finalizada con éxito.');
-        // 3. Responder al servicio Web-Cron (ej. Cron-Job.org)
-        res.status(200).json({ message: 'Tarea de generación de recursos ejecutada.' });
+        // 2. Ejecutar la Tarea
+        console.log(`[WEB-CRON] Iniciando tarea de generación de recursos a las ${new Date().toISOString()}`);
+        try {
+            // La función runResourceGeneratorJob (del archivo jobs/resourceGenerator.js)
+            // se encargará de toda la lógica de cálculo de recursos para los jugadores.
+            await runResourceGeneratorJob();
 
-    } catch (error) {
-        console.error('[WEB-CRON] Error durante la ejecución de la tarea:', error);
-        res.status(500).json({ message: 'Error interno al ejecutar la tarea programada.', error: error.message });
-    }
+            // También intentamos ejecutar la actualización económica de las ciudades IA
+            try {
+                const aiEngine = require('./jobs/ai_economic_engine');
+                if (aiEngine && typeof aiEngine.runEconomicUpdate === 'function') {
+                    console.log('[WEB-CRON] Iniciando AI economic engine.');
+                    // runEconomicUpdate expects the DB pool
+                    await aiEngine.runEconomicUpdate(pool);
+                    console.log('[WEB-CRON] AI economic engine finalizado.');
+                } else {
+                    console.warn('[WEB-CRON] ai_economic_engine tiene formato inesperado, no se llamó.');
+                }
+            } catch (aiErr) {
+                // Log but don't fail the whole endpoint if AI engine has an issue
+                console.error('[WEB-CRON] Error ejecutando AI economic engine:', aiErr && aiErr.stack ? aiErr.stack : aiErr);
+            }
+
+            console.log('[WEB-CRON] Tarea finalizada con éxito.');
+            // 3. Responder al servicio Web-Cron (ej. Cron-Job.org)
+            res.status(200).json({ message: 'Tarea de generación de recursos y AI ejecutada.' });
+
+        } catch (error) {
+            console.error('[WEB-CRON] Error durante la ejecución de la tarea:', error);
+            res.status(500).json({ message: 'Error interno al ejecutar la tarea programada.', error: error.message });
+        }
 });
 
 
