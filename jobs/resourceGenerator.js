@@ -110,8 +110,6 @@ async function processEntity(entityId, options) {
                 };
             });
 
-            const populationService = require('../utils/populationService');
-
             const tryConsumeForType = (typeKey, resourceKeys) => {
                 const cur = popMap[typeKey]?.current || 0;
                 const max = popMap[typeKey]?.max || 0;
