@@ -100,9 +100,16 @@ const RESOURCE_GENERATOR_STONE_PER_TICK = 1; // suma fija de piedra por tick
 
 // Resource category mapping (lowercase keys)
 const RESOURCE_CATEGORIES = {
+    // commons
     wood: 'common', stone: 'common', food: 'common', water: 'common', clay: 'common', leather: 'common', coal: 'common', copper: 'common', wool: 'common', honey: 'common',
+    // processed
     lumber: 'processed', tools: 'processed', iron_ingot: 'processed', beer: 'processed', baked_brick: 'processed', textile: 'processed', silk_cloth: 'processed', salted: 'processed', refined_clay: 'processed', books: 'processed', purple_dye: 'processed',
-    spice: 'specialized', damascus_steel: 'specialized', preservation_elixir: 'specialized', explosive_compound: 'specialized', royal_dye: 'specialized', illustrated_parchment: 'specialized', magic_catalyst: 'specialized'
+    // specialized
+    spice: 'specialized', damascus_steel: 'specialized', preservation_elixir: 'specialized', explosive_compound: 'specialized', royal_dye: 'specialized', illustrated_parchment: 'specialized', magic_catalyst: 'specialized',
+    // strategic + special categories
+    rare_iron: 'strategic', sea_salt: 'strategic', linen: 'strategic', gold_dye: 'strategic', sulfur: 'strategic', precious_gems: 'strategic', silk: 'strategic',
+    // Gold is its own category to allow special UI handling
+    gold: 'gold'
 };
 
 
