@@ -122,6 +122,185 @@ async function runEconomicUpdate(pool) {
                     console.warn('[AI Engine] Error deciding/performing construction for entity', entityId, buildErr.message);
                 }
 
+                // --- TRADING PHASE: attempt light-weight trades with nearby AI cities to balance resources
+                try {
+                    // find nearby AI city entities (excluding self)
+                    // findNearbyAICities: return ALL other cityIA entities on the map (search entire map)
+                    async function findNearbyAICities(client, /* x, y ignored */, radius = 0, limit = 0) {
+                        // Return all cityIA entities except self. Limit is optional.
+                        const q = limit && limit > 0 ? `SELECT e.id, e.x_coord, e.y_coord FROM entities e WHERE e.type = 'cityIA' AND e.id <> $1 LIMIT $2` : `SELECT e.id, e.x_coord, e.y_coord FROM entities e WHERE e.type = 'cityIA' AND e.id <> $1`;
+                        const params = limit && limit > 0 ? [entityId, limit] : [entityId];
+                        const res = await client.query(q, params);
+                        return res.rows || [];
+                    }
+
+                    async function computeMarketPrice(client, typeName, amount, action) {
+                        const t = (typeName || '').toString().toLowerCase();
+                        const ptRes = await client.query('SELECT lower(name) as name, price_base FROM resource_types WHERE lower(name) = $1', [t]);
+                        if (!ptRes.rows.length) return null;
+                        const base = Number(ptRes.rows[0].price_base) || 0;
+                        if (!base || base <= 0) return null;
+                        const stockRes = await client.query(
+                            `SELECT COALESCE(SUM(ri.amount),0) as stock
+                             FROM resource_inventory ri
+                             JOIN resource_types rt ON ri.resource_type_id = rt.id
+                             WHERE lower(rt.name) = $1`,
+                            [t]
+                        );
+                        const stockBefore = Number((stockRes.rows[0] && stockRes.rows[0].stock) || 0);
+                        const K_BUY = 0.5, K_SELL = 0.3, MIN_PRICE = 1;
+                        let price = base;
+                        if ((action || 'buy') === 'buy') {
+                            const factor = 1 + K_BUY * (amount / Math.max(1, stockBefore));
+                            price = Math.max(MIN_PRICE, Math.round(base * factor));
+                        } else {
+                            const factor = 1 - K_SELL * (amount / Math.max(1, stockBefore + amount));
+                            price = Math.max(MIN_PRICE, Math.round(base * factor));
+                        }
+                        return { price, base, stockBefore };
+                    }
+
+                    // atomic trade using existing client (mirrors /api/resources/trade)
+                    async function execAtomicTradeWithClient(client, buyerId, sellerId, resourceName, pricePerUnit, qty) {
+                        const rtRes = await client.query('SELECT id, lower(name) as name FROM resource_types WHERE lower(name) = $1', [resourceName.toString().toLowerCase()]);
+                        if (!rtRes.rows.length) throw new Error('Unknown resource: ' + resourceName);
+                        const resourceTypeId = rtRes.rows[0].id;
+                        const goldRtRes = await client.query('SELECT id FROM resource_types WHERE lower(name) = $1', ['gold']);
+                        if (!goldRtRes.rows.length) throw new Error('Gold resource type missing');
+                        const goldTypeId = goldRtRes.rows[0].id;
+
+                        const idsToLock = [buyerId, sellerId].map(id => parseInt(id, 10)).sort((a, b) => a - b);
+                        for (const eid of idsToLock) {
+                            await client.query(`SELECT ri.id FROM resource_inventory ri WHERE ri.entity_id = $1 FOR UPDATE`, [eid]);
+                        }
+
+                        const invRes = await client.query(
+                            `SELECT ri.entity_id, rt.id as resource_type_id, lower(rt.name) as name, ri.amount
+                             FROM resource_inventory ri
+                             JOIN resource_types rt ON ri.resource_type_id = rt.id
+                             WHERE ri.entity_id = ANY($1::int[]) AND (rt.id = $2 OR rt.id = $3)`,
+                            [[buyerId, sellerId], resourceTypeId, goldTypeId]
+                        );
+
+                        const byEntity = {};
+                        for (const row of invRes.rows) {
+                            const eid = String(row.entity_id);
+                            if (!byEntity[eid]) byEntity[eid] = {};
+                            byEntity[eid][row.name] = parseInt(row.amount, 10);
+                        }
+
+                        const buyerInv = byEntity[String(buyerId)] || {};
+                        const sellerInv = byEntity[String(sellerId)] || {};
+
+                        const buyerGold = buyerInv['gold'] || 0;
+                        const sellerResource = sellerInv[resourceName.toString().toLowerCase()] || 0;
+
+                        const totalCost = Number(pricePerUnit) * qty;
+                        if (buyerGold < totalCost) throw new Error('Buyer lacks gold');
+                        if (sellerResource < qty) throw new Error('Seller lacks stock');
+
+                        await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`, [totalCost, buyerId, goldTypeId]);
+                        await client.query(`UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`, [totalCost, sellerId, goldTypeId]);
+
+                        await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`, [qty, sellerId, resourceTypeId]);
+                        await client.query(`UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`, [qty, buyerId, resourceTypeId]);
+
+                        const updatedRes = await client.query(
+                            `SELECT ri.entity_id, rt.name, ri.amount
+                             FROM resource_inventory ri
+                             JOIN resource_types rt ON ri.resource_type_id = rt.id
+                             WHERE ri.entity_id = ANY($1::int[])
+                             ORDER BY ri.entity_id, rt.id`,
+                            [[buyerId, sellerId]]
+                        );
+                        const snapshot = {};
+                        for (const r of updatedRes.rows) {
+                            const eid = String(r.entity_id);
+                            if (!snapshot[eid]) snapshot[eid] = {};
+                            snapshot[eid][r.name.toLowerCase()] = parseInt(r.amount, 10);
+                        }
+                        return snapshot;
+                    }
+
+                    // Trading heuristics
+                    const RADIUS = 8;
+                    const MAX_TRADES_PER_TICK = 3;
+                    const BUY_LOW = 120;
+                    const SELL_HIGH = 500;
+                    const SAFETY_STOCK = 50;
+                    const MAX_AMOUNT = 100;
+
+                    // Load this entity coords and resources
+                    const entRowRes = await client.query('SELECT x_coord, y_coord FROM entities WHERE id = $1', [entityId]);
+                    const entRow = entRowRes.rows[0] || {};
+                    const x = entRow.x_coord || 0;
+                    const y = entRow.y_coord || 0;
+
+                    const nearby = await findNearbyAICities(client, x, y, RADIUS, 8);
+                    if ((nearby || []).length > 0) {
+                        const meRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`, [entityId]);
+                        const myResources = Object.fromEntries(meRes.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+
+                        let tradesDone = 0;
+
+                        // Try to buy deficits
+                        for (const [resName, curAmt] of Object.entries(myResources)) {
+                            if (tradesDone >= MAX_TRADES_PER_TICK) break;
+                            if (resName === 'gold') continue;
+                            if (curAmt >= BUY_LOW) continue;
+                            const need = Math.min(MAX_AMOUNT, BUY_LOW - curAmt);
+                            for (const nb of nearby) {
+                                if (tradesDone >= MAX_TRADES_PER_TICK) break;
+                                try {
+                                    const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resName]);
+                                    const sellerStock = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
+                                    if (sellerStock <= SAFETY_STOCK) continue;
+                                    const availableToSell = Math.min(need, Math.max(0, sellerStock - SAFETY_STOCK));
+                                    if (availableToSell <= 0) continue;
+                                    const mp = await computeMarketPrice(client, resName, availableToSell, 'buy');
+                                    if (!mp) continue;
+                                    const qty = Math.min(availableToSell, MAX_AMOUNT);
+                                    await execAtomicTradeWithClient(client, entityId, nb.id, resName, mp.price, qty);
+                                    console.log(`[AI Engine][Trade] entity ${entityId} bought ${qty} ${resName} from ${nb.id} at ${mp.price} each`);
+                                    tradesDone++;
+                                } catch (tErr) {
+                                    // ignore per-seller failures
+                                }
+                            }
+                        }
+
+                        // Try to sell surpluses
+                        if (tradesDone < MAX_TRADES_PER_TICK) {
+                            for (const [resName, curAmt] of Object.entries(myResources)) {
+                                if (tradesDone >= MAX_TRADES_PER_TICK) break;
+                                if (resName === 'gold') continue;
+                                if (curAmt <= SELL_HIGH) continue;
+                                const surplus = curAmt - SELL_HIGH;
+                                for (const nb of nearby) {
+                                    if (tradesDone >= MAX_TRADES_PER_TICK) break;
+                                    try {
+                                        const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resName]);
+                                        const neighborAmt = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
+                                        if (neighborAmt >= BUY_LOW) continue;
+                                        const wanted = Math.min(MAX_AMOUNT, BUY_LOW - neighborAmt);
+                                        const toSell = Math.min(surplus, wanted);
+                                        if (toSell <= 0) continue;
+                                        const mp = await computeMarketPrice(client, resName, toSell, 'sell');
+                                        if (!mp) continue;
+                                        await execAtomicTradeWithClient(client, nb.id, entityId, resName, mp.price, toSell);
+                                        console.log(`[AI Engine][Trade] entity ${entityId} sold ${toSell} ${resName} to ${nb.id} at ${mp.price} each`);
+                                        tradesDone++;
+                                    } catch (tErr) {
+                                        // ignore
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (tradeErr) {
+                    console.warn('[AI Engine] Error during trading phase for entity', entityId, tradeErr.message);
+                }
+
                 await client.query('COMMIT');
             } catch (err) {
                 try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
