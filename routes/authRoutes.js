@@ -217,6 +217,10 @@ router.get('/me', authenticateToken, async (req, res) => {
       console.warn('⚠️ Tabla buildings no encontrada o sin datos:', err.message);
     }
 
+    // Obtener resumen de población desde la nueva tabla
+    const populationService = require('../utils/populationService');
+    const popSummary = await populationService.getPopulationSummary(entity.id);
+
     // 4️⃣ Obtener info del usuario base
     const userResult = await pool.query(
       `SELECT id, username, created_at FROM users WHERE id = $1`,
