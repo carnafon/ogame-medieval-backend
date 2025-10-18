@@ -9,10 +9,10 @@ router.get('/', authenticateToken, async (req, res) => {
   if (!entityId) return res.status(400).json({ message: 'Falta entityId en la consulta.' });
   try {
     const summary = await populationService.getPopulationSummary(entityId);
-    // Also return raw per-type rows for convenience
-    const client = require('../db');
-    const rows = await client.query('SELECT type, current_population, max_population, available_population FROM populations WHERE entity_id = $1', [entityId]);
-    return res.json({ entityId, summary, rows: rows.rows });
+    // Also return raw per-type rows for convenience (named `types` to match frontend expectation)
+    const pool = require('../db');
+    const rows = await pool.query('SELECT type, current_population, max_population, available_population FROM populations WHERE entity_id = $1', [entityId]);
+    return res.json({ entityId, summary, types: rows.rows });
   } catch (err) {
     console.error('Error al obtener población:', err.message);
     return res.status(500).json({ message: 'Error al obtener población.', error: err.message });
@@ -37,7 +37,10 @@ router.post('/', authenticateToken, async (req, res) => {
     }
     await client.query('COMMIT');
     const summary = await populationService.getPopulationSummary(entityId);
-    return res.json({ message: 'Población actualizada.', entityId, summary });
+    // Return per-type rows to match GET and frontend expectation
+    const pool = require('../db');
+    const rows = await pool.query('SELECT type, current_population, max_population, available_population FROM populations WHERE entity_id = $1', [entityId]);
+    return res.json({ message: 'Población actualizada.', entityId, summary, types: rows.rows });
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (e) {}
     console.error('Error actualizando población:', err.message);
