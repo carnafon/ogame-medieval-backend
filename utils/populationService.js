@@ -147,6 +147,8 @@ async function calculateAvailablePopulation(entityId) {
     const buildings = Array.isArray(bres.rows) ? bres.rows : [];
 
     const occupation = computeOccupationFromBuildings(buildings);
+    // New rule: available population = current_population - occupation (factorial-derived)
+    // Clamp at 0 so populations never go negative
     const available = Math.max(0, current - occupation);
     return { entityId, current, occupation, available };
   } finally {
@@ -154,5 +156,5 @@ async function calculateAvailablePopulation(entityId) {
   }
 }
 
-module.exports = { initPopulations, getPopulationSummary, getPopulationSummaryWithClient, setPopulationForTypeWithClient, POP_TYPES };
+module.exports = { initPopulations, getPopulationSummary, getPopulationSummaryWithClient, setPopulationForTypeWithClient, POP_TYPES, computeOccupationFromBuildings, calculateAvailablePopulation };
 

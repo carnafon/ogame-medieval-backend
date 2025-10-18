@@ -32,7 +32,16 @@ router.post('/', authenticateToken, async (req, res) => {
       const type = (u.type || '').toLowerCase();
       const cur = Number.isFinite(u.current_population) ? u.current_population : 0;
       const max = Number.isFinite(u.max_population) ? u.max_population : 0;
-      const avail = Number.isFinite(u.available_population) ? u.available_population : Math.max(0, max - cur);
+      let avail;
+      if (Number.isFinite(u.available_population)) {
+        avail = u.available_population;
+      } else {
+        // compute occupation from buildings for this entity and derive available = current - occupation
+        const popUtils = require('../utils/populationService');
+        const bres = await client.query('SELECT type, level, count FROM buildings WHERE entity_id = $1', [entityId]);
+        const occupation = popUtils.computeOccupationFromBuildings(bres.rows || []);
+        avail = Math.max(0, cur - occupation);
+      }
       await populationService.setPopulationForTypeWithClient(client, entityId, type, cur, max, avail);
     }
     await client.query('COMMIT');

@@ -4,7 +4,7 @@ const BUILDING_COSTS = {
   house: { wood: 20, stone: 10, food: 5 },
   sawmill: { wood: 50, stone: 30, food: 10 },
   quarry: { wood: 40, stone: 80, food: 15 },
-  farm: { wood: 40, stone: 10, food: 10 },
+  farm: { wood: 40, stone: 10, food: 0 },
   well: { wood: 15, stone: 10, food: 0 },
   clay_pit: { wood: 20, stone: 20, food: 0 },
   tannery: { wood: 25, stone: 15, food: 5 },

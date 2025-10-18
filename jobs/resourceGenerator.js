@@ -60,8 +60,10 @@ async function processEntity(entityId, options) {
 
 
 
-        // Obtener edificios del usuario
-        const buildings = await getBuildings(entityId);
+    // Obtener edificios del usuario
+    const buildings = await getBuildings(entityId);
+    // compute occupation once (sum of factorials across buildings)
+    const occupation = populationService.computeOccupationFromBuildings(buildings);
 
     // Calcular población y producción acumulada
     const populationService = require('../utils/populationService');
@@ -141,18 +143,19 @@ async function processEntity(entityId, options) {
             // Persist updated population rows for each type
             try {
                 if (poorRes.newCurrent !== undefined) {
-                    const avail = Math.max(0, (poorRes.max || 0) - poorRes.newCurrent);
+                    // available = current - occupation (clamped at 0)
+                    const avail = Math.max(0, poorRes.newCurrent - occupation);
                     await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', poorRes.newCurrent, poorRes.max || 0, avail);
                     // update local popMap as well
                     popMap.poor = { current: poorRes.newCurrent, max: poorRes.max || 0 };
                 }
                 if (burgessRes.newCurrent !== undefined) {
-                    const avail = Math.max(0, (burgessRes.max || 0) - burgessRes.newCurrent);
+                    const avail = Math.max(0, burgessRes.newCurrent - occupation);
                     await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', burgessRes.newCurrent, burgessRes.max || 0, avail);
                     popMap.burgess = { current: burgessRes.newCurrent, max: burgessRes.max || 0 };
                 }
                 if (patricianRes.newCurrent !== undefined) {
-                    const avail = Math.max(0, (patricianRes.max || 0) - patricianRes.newCurrent);
+                    const avail = Math.max(0, patricianRes.newCurrent - occupation);
                     await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', patricianRes.newCurrent, patricianRes.max || 0, avail);
                     popMap.patrician = { current: patricianRes.newCurrent, max: patricianRes.max || 0 };
                 }
@@ -228,7 +231,8 @@ async function processEntity(entityId, options) {
             // Persist new population into populations table (we'll update the 'poor' bucket as a simple default)
             try {
                 const totalMax = popSummary.max || popSummary.total || 0;
-                const available = Math.max(0, totalMax - newPopulation);
+                // available = current - occupation (clamped at 0)
+                const available = Math.max(0, newPopulation - occupation);
                 // update 'poor' current_population and recompute available_population for that type
                 await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', newPopulation, totalMax, available);
             } catch (pErr) {
@@ -261,7 +265,7 @@ async function processEntity(entityId, options) {
             population: {
                 current_population: newPopulation,
                 max_population: maxPopulation,
-                available_population: maxPopulation - newPopulation
+                available_population: Math.max(0, newPopulation - require('../utils/populationService').computeOccupationFromBuildings(buildings))
             }
         };
     } catch (err) {
