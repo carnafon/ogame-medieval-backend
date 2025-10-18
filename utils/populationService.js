@@ -13,16 +13,19 @@ async function initPopulations(clientOrPool, entityId, distribution = null) {
   try {
     if (!usingClient) await client.query('BEGIN');
 
-    // Default distribution: all population in 'poor' unless distribution provided
+    // Default distribution: all population placed in 'poor' unless distribution provided
     const defaultTotal = 0; // caller will decide totals; we insert zeros by default
     const dist = distribution || { poor: defaultTotal, burgess: 0, patrician: 0 };
 
     for (const t of POP_TYPES) {
-      const amt = typeof dist[t] === 'number' ? dist[t] : 0;
+      const cur = typeof dist[t] === 'number' ? dist[t] : 0;
+      const max = cur; // default max equals initial current unless caller provides different logic
+      const avail = Math.max(0, max - cur);
       await client.query(
-        `INSERT INTO populations (entity_id, type, amount) VALUES ($1,$2,$3)
-         ON CONFLICT (entity_id, type) DO UPDATE SET amount = EXCLUDED.amount`,
-        [entityId, t, amt]
+        `INSERT INTO populations (entity_id, type, current_population, max_population, available_population)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (entity_id, type) DO UPDATE SET current_population = EXCLUDED.current_population, max_population = EXCLUDED.max_population, available_population = EXCLUDED.available_population`,
+        [entityId, t, cur, max, avail]
       );
     }
 
