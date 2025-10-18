@@ -4,14 +4,37 @@
  * * mediante un cron job para simular la actividad de las ciudades IA.
  */
 
-// Usamos require() para importar la configuración de la carpeta utils
-const { calculateUpgradeRequirements, BUILDING_CONFIG } = require('../utils/ai_building_config');
+// Usamos require() para importar la configuración de edificios usada por jugadores
+const { calculateUpgradeRequirements } = require('../utils/ai_building_config');
+const { BUILDING_COSTS } = require('../constants/buildings');
 const aiCityService = require('../utils/ai_city_service');
 const { getBuildings, getBuildingLevel } = require('../utils/buildingsService');
 const pool = require('../db');
 const { calculateProductionForDuration, TICK_SECONDS } = require('../utils/gameUtils');
 const resourcesService = require('../utils/resourcesService');
 const populationService = require('../utils/populationService');
+
+// Helper: compute upgrade requirements using BUILDING_COSTS same as the game routes
+function calculateUpgradeRequirementsFromConstants(buildingType, currentLevel) {
+    const costBase = BUILDING_COSTS[buildingType];
+    if (!costBase) return null;
+    const factor = 1.7;
+    const nextLevel = currentLevel + 1;
+    const requiredCost = {
+        wood: Math.ceil((costBase.wood || 0) * Math.pow(nextLevel, factor)),
+        stone: Math.ceil((costBase.stone || 0) * Math.pow(nextLevel, factor)),
+        food: Math.ceil((costBase.food || 0) * Math.pow(nextLevel, factor)),
+    };
+    // population requirements: prefer explicit popNeeded if present
+    const popNeeded = typeof costBase.popNeeded === 'number' ? costBase.popNeeded : (buildingType === 'house' ? 0 : 1);
+    return {
+        nextLevel,
+        requiredCost,
+        requiredTimeS: 0,
+        popForNextLevel: popNeeded,
+        currentPopRequirement: 0
+    };
+}
 
 /**
  * Procesa la lógica económica (construcción, producción, comercio) para todas las ciudades IA.
@@ -63,10 +86,10 @@ async function runEconomicUpdate(pool) {
                     const runtimeBuildings = {};
                     curBuildings.forEach(b => { runtimeBuildings[b.type] = b.level || 0; });
 
-                    // choose building with lowest level
+                    // choose building with lowest level using the same building list as normal players
                     let bestUpgrade = null;
                     let lowestLevel = Infinity;
-                    for (const buildingId in BUILDING_CONFIG) {
+                    for (const buildingId of Object.keys(BUILDING_COSTS)) {
                         const currentLevel = runtimeBuildings[buildingId] || 0;
                         if (currentLevel < lowestLevel) {
                             lowestLevel = currentLevel;
@@ -75,7 +98,7 @@ async function runEconomicUpdate(pool) {
                     }
                     if (bestUpgrade) {
                         console.log(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
-                        const reqs = calculateUpgradeRequirements(bestUpgrade, lowestLevel);
+                        const reqs = calculateUpgradeRequirementsFromConstants(bestUpgrade, lowestLevel);
                         console.log(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
                         if (reqs) {
                             // check population (lock populations and read summary) using centralized helper
@@ -381,7 +404,7 @@ async function completeConstruction(client, ai, entityRow) {
     const cc = runtime.current_construction;
     if (!cc) return;
     const { building_id, level_to_upgrade } = cc;
-    const reqs = calculateUpgradeRequirements(building_id, level_to_upgrade - 1);
+    const reqs = calculateUpgradeRequirementsFromConstants(building_id, level_to_upgrade - 1);
     if (!reqs) return;
 
     const popDelta = reqs.popForNextLevel - reqs.currentPopRequirement;
@@ -423,7 +446,7 @@ async function decideNewConstruction(client, ai, entityRow) {
     if (!bestUpgrade) return;
 
     const currentLevel = (runtime.buildings && runtime.buildings[bestUpgrade]) || 0;
-    const reqs = calculateUpgradeRequirements(bestUpgrade, currentLevel);
+    const reqs = calculateUpgradeRequirementsFromConstants(bestUpgrade, currentLevel);
     if (!reqs) return;
 
     const availablePop = (runtime.population || 0) - (runtime.pop_consumed || 0);
