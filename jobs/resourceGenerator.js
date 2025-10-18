@@ -62,11 +62,10 @@ async function processEntity(entityId, options) {
 
     // Obtener edificios del usuario
     const buildings = await getBuildings(entityId);
+    // cargar populationService antes de usarlo (evita temporal dead zone)
+    const populationService = require('../utils/populationService');
     // compute occupation once (sum of factorials across buildings)
     const occupation = populationService.computeOccupationFromBuildings(buildings);
-
-    // Calcular población y producción acumulada
-    const populationService = require('../utils/populationService');
     const popSummary = await populationService.getPopulationSummaryWithClient(client, entityId);
     const popStats = calculatePopulationStats(buildings, parseInt(popSummary.total, 10));
     const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
