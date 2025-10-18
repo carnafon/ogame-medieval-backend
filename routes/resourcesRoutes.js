@@ -162,6 +162,129 @@ router.post('/market-price', async (req, res) => {
   }
 });
 
+// POST /api/resources/trade
+// Body: { buyerId, sellerId, resource: 'wood', price: 10, amount?: 1 }
+// Performs an atomic trade: buyer pays gold -> seller, seller gives resource -> buyer
+router.post('/trade', authenticateToken, async (req, res) => {
+  const { buyerId, sellerId, resource, price, amount } = req.body || {};
+  const qty = amount == null ? 1 : parseInt(amount, 10);
+
+  if (!buyerId || !sellerId || !resource || price == null) {
+    return res.status(400).json({ message: 'Faltan campos: buyerId, sellerId, resource, price. amount es opcional.' });
+  }
+  if (qty <= 0) return res.status(400).json({ message: 'La cantidad debe ser mayor que 0.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Resolve resource type id (case-insensitive)
+    const rtRes = await client.query('SELECT id, lower(name) as name FROM resource_types WHERE lower(name) = $1', [resource.toString().toLowerCase()]);
+    if (rtRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: `Tipo de recurso desconocido: ${resource}` });
+    }
+    const resourceTypeId = rtRes.rows[0].id;
+    const goldRtRes = await client.query('SELECT id FROM resource_types WHERE lower(name) = $1', ['gold']);
+    if (goldRtRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(500).json({ message: 'Tipo de recurso "gold" no encontrado en la base de datos.' });
+    }
+    const goldTypeId = goldRtRes.rows[0].id;
+
+    // Lock buyer and seller inventory rows for the two resource types (resource and gold)
+    // We lock all inventory rows for both entities to simplify and avoid deadlocks ordering issues by always locking in entity id order
+    const idsToLock = [buyerId, sellerId].map(id => parseInt(id, 10)).sort((a, b) => a - b);
+
+    for (const eid of idsToLock) {
+      await client.query(
+        `SELECT ri.id FROM resource_inventory ri WHERE ri.entity_id = $1 FOR UPDATE`,
+        [eid]
+      );
+    }
+
+    // Read current amounts
+    const invRes = await client.query(
+      `SELECT ri.entity_id, rt.id as resource_type_id, lower(rt.name) as name, ri.amount
+       FROM resource_inventory ri
+       JOIN resource_types rt ON ri.resource_type_id = rt.id
+       WHERE ri.entity_id = ANY($1::int[]) AND (rt.id = $2 OR rt.id = $3)`,
+      [[buyerId, sellerId], resourceTypeId, goldTypeId]
+    );
+
+    // Map: entity -> { resourceName: amount }
+    const byEntity = {};
+    for (const row of invRes.rows) {
+      const eid = String(row.entity_id);
+      if (!byEntity[eid]) byEntity[eid] = {};
+      byEntity[eid][row.name] = parseInt(row.amount, 10);
+    }
+
+    const buyerInv = byEntity[String(buyerId)] || {};
+    const sellerInv = byEntity[String(sellerId)] || {};
+
+    const buyerGold = buyerInv['gold'] || 0;
+    const sellerResource = sellerInv[resource.toString().toLowerCase()] || 0;
+
+    const totalCost = Number(price) * qty;
+
+    if (buyerGold < totalCost) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'Fondos insuficientes en comprador', have: buyerGold, need: totalCost });
+    }
+    if (sellerResource < qty) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'Stock insuficiente en vendedor', have: sellerResource, need: qty });
+    }
+
+    // Perform updates: subtract gold from buyer, add gold to seller, subtract resource from seller, add resource to buyer
+    await client.query(
+      `UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`,
+      [totalCost, buyerId, goldTypeId]
+    );
+    await client.query(
+      `UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`,
+      [totalCost, sellerId, goldTypeId]
+    );
+
+    await client.query(
+      `UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`,
+      [qty, sellerId, resourceTypeId]
+    );
+    await client.query(
+      `UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`,
+      [qty, buyerId, resourceTypeId]
+    );
+
+    // Return updated snapshots for both entities
+    const updatedRes = await client.query(
+      `SELECT ri.entity_id, rt.name, ri.amount
+       FROM resource_inventory ri
+       JOIN resource_types rt ON ri.resource_type_id = rt.id
+       WHERE ri.entity_id = ANY($1::int[])
+       ORDER BY ri.entity_id, rt.id`,
+      [[buyerId, sellerId]]
+    );
+
+    await client.query('COMMIT');
+
+    const snapshot = {};
+    for (const r of updatedRes.rows) {
+      const eid = String(r.entity_id);
+      if (!snapshot[eid]) snapshot[eid] = {};
+      snapshot[eid][r.name.toLowerCase()] = parseInt(r.amount, 10);
+    }
+
+    res.json({ message: 'Trade ejecutado correctamente', buyerId: Number(buyerId), sellerId: Number(sellerId), resource: resource.toString().toLowerCase(), price: Number(price), amount: qty, snapshot });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
+    console.error('Error executing trade:', err && err.stack ? err.stack : err);
+    res.status(500).json({ message: 'Error ejecutando trade', error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
 
 
