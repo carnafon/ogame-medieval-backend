@@ -126,7 +126,7 @@ async function runEconomicUpdate(pool) {
                 try {
                     // find nearby AI city entities (excluding self)
                     // findNearbyAICities: return ALL other cityIA entities on the map (search entire map)
-                    async function findNearbyAICities(client, /* x, y ignored */, radius = 0, limit = 0) {
+                    async function findNearbyAICities(client, _x, _y, radius = 0, limit = 0) {
                         // Return all cityIA entities except self. Limit is optional.
                         const q = limit && limit > 0 ? `SELECT e.id, e.x_coord, e.y_coord FROM entities e WHERE e.type = 'cityIA' AND e.id <> $1 LIMIT $2` : `SELECT e.id, e.x_coord, e.y_coord FROM entities e WHERE e.type = 'cityIA' AND e.id <> $1`;
                         const params = limit && limit > 0 ? [entityId, limit] : [entityId];
