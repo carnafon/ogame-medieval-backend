@@ -17,7 +17,7 @@ const populationService = require('../utils/populationService');
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, user_id, faction_id, type, x_coord, y_coord, population
+      `SELECT id, user_id, faction_id, type, x_coord, y_coord
        FROM entities`
     );
     res.status(200).json(result.rows);
@@ -35,7 +35,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
-      `SELECT e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord, e.population, f.name AS faction_name, u.username
+      `SELECT e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord, f.name AS faction_name, u.username
        FROM entities e
        LEFT JOIN factions f ON f.id = e.faction_id
        LEFT JOIN users u ON u.id = e.user_id
@@ -81,7 +81,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
  * Crea una nueva entidad (jugador, IA, etc.).
  */
 router.post('/', authenticateToken, async (req, res) => {
-  const { user_id, faction_id, type, x_coord, y_coord, population } = req.body;
+  const { user_id, faction_id, type, x_coord, y_coord } = req.body;
 
   if (!type || x_coord == null || y_coord == null) {
     return res.status(400).json({ message: 'Faltan campos obligatorios: type, x_coord, y_coord' });
@@ -89,10 +89,10 @@ router.post('/', authenticateToken, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO entities (user_id, faction_id, type, x_coord, y_coord, population)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO entities (user_id, faction_id, type, x_coord, y_coord, last_resource_update)
+       VALUES ($1, $2, $3, $4, $5, NOW())
        RETURNING *`,
-      [user_id || null, faction_id || null, type, x_coord, y_coord, population || 0]
+      [user_id || null, faction_id || null, type, x_coord, y_coord]
     );
 
     res.status(201).json({
@@ -111,7 +111,7 @@ router.post('/', authenticateToken, async (req, res) => {
  */
 router.patch('/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { x_coord, y_coord, population, faction_id, type } = req.body;
+  const { x_coord, y_coord, faction_id, type } = req.body;
 
   try {
     const fields = [];
@@ -120,7 +120,8 @@ router.patch('/:id', authenticateToken, async (req, res) => {
 
     if (x_coord != null) { fields.push(`x_coord = $${index++}`); values.push(x_coord); }
     if (y_coord != null) { fields.push(`y_coord = $${index++}`); values.push(y_coord); }
-    if (population != null) { fields.push(`population = $${index++}`); values.push(population); }
+  // population is now managed in the `populations` table via populationService;
+  // do not attempt to update a non-existent column on entities here.
     if (faction_id != null) { fields.push(`faction_id = $${index++}`); values.push(faction_id); }
     if (type != null) { fields.push(`type = $${index++}`); values.push(type); }
 
