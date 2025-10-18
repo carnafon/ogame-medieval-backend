@@ -3,7 +3,7 @@ const { calculatePopulationStats, calculateProduction, calculateProductionForDur
 const { getBuildings } = require('../utils/buildingsService');
 
 // Parámetros configurables
-const POPULATION_CHANGE_RATE = 1; // cambio de población por tick
+const POPULATION_CHANGE_RATE = 0; // cambio de población por tick
 
 // Opciones por defecto que la tarea usará
 const currentOptions = {
