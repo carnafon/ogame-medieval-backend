@@ -253,6 +253,31 @@ async function buildPlanner(perception, pool, opts = {}) {
   const candidates = [];
   const prodRatesAll = gameUtils.PRODUCTION_RATES || {};
 
+    // helper: try to resolve a productionRates key for a buildingId with normalization and small map
+    function resolveProdKey(buildingId) {
+      if (!buildingId) return null;
+      if (prodRatesAll[buildingId]) return buildingId;
+      const lower = buildingId.toString().toLowerCase();
+      if (prodRatesAll[lower]) return lower;
+      // small custom mapping for spanish/english variants
+      const canonicalMap = {
+        'casa_de_piedra': 'house',
+        'casa_de_ladrillos': 'house',
+        'casa': 'house',
+        'aserradero': 'sawmill',
+        'cantera': 'quarry',
+        'granja': 'farm',
+        'pozo': 'well',
+        'mina_carbon': 'coal_mine',
+        'mina_cobre': 'copper_mine'
+      };
+      if (canonicalMap[lower] && prodRatesAll[canonicalMap[lower]]) return canonicalMap[lower];
+      // try stripping common suffixes/prefixes
+      const stripped = lower.replace(/^(la_|el_|the_)/, '').replace(/_build|_building|_edificio/g, '');
+      if (prodRatesAll[stripped]) return stripped;
+      return null;
+    }
+
   // compute population stats for consumption
   let populationStats = { current_population: 0 };
   try {
@@ -284,7 +309,13 @@ async function buildPlanner(perception, pool, opts = {}) {
     }
 
     // estimate marginal production value per tick (pre-adjust)
-    const rates = prodRatesAll[buildingId] || {};
+    const prodKey = resolveProdKey(buildingId);
+    const rates = prodKey ? (prodRatesAll[prodKey] || {}) : {};
+    if (!prodKey) {
+      logEvent({ type: 'build_prod_key_missing', entityId, buildingId, note: 'no matching production key' });
+    } else if (prodKey !== buildingId) {
+      logEvent({ type: 'build_prod_key_mapped', entityId, buildingId, usedKey: prodKey });
+    }
     let rawValueSum = 0;
     for (const res of Object.keys(rates)) {
       const rate = Number(rates[res]) || 0;
