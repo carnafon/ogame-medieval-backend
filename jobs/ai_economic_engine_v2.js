@@ -24,6 +24,34 @@ const DEFAULTS = {
   PROFIT_MARGIN: 1.05, // only sell if market price >= base * PROFIT_MARGIN
 };
 
+// Simple in-memory metrics (reset on server restart). For canary this is sufficient; later push to external metrics.
+const metrics = {
+  ticksRun: 0,
+  citiesProcessed: 0,
+  actionsExecuted: 0,
+  successfulTrades: 0,
+  successfulBuilds: 0,
+  failedActions: 0,
+  lastRunAt: null,
+};
+
+function recordMetric(key, delta = 1) {
+  if (typeof metrics[key] === 'number') metrics[key] += delta;
+}
+
+function getMetrics() {
+  return Object.assign({}, metrics);
+}
+
+function resetMetrics() {
+  metrics.ticksRun = 0; metrics.citiesProcessed = 0; metrics.actionsExecuted = 0; metrics.successfulTrades = 0; metrics.successfulBuilds = 0; metrics.failedActions = 0; metrics.lastRunAt = null;
+}
+
+function logEvent(event) {
+  // Structured JSON log; keep compact
+  try { console.log('[AI v2][event] ' + JSON.stringify(event)); } catch (e) { console.log('[AI v2][event] (could not stringify)'); }
+}
+
 // Perception: snapshot of entity inventory, coords, and price_base map
 async function perceiveSnapshot(pool, entityId, opts = {}) {
   const client = pool;
@@ -135,9 +163,13 @@ async function executeTradeAction(pool, action, perception, opts = {}) {
       try {
         const snapshot = await marketService.tradeWithClient(client, buyerId, perception.entityId, resource, mp.price, qty);
         await client.query('COMMIT');
+        recordMetric('actionsExecuted', 1); recordMetric('successfulTrades', 1);
+        logEvent({ type: 'trade', action: 'sell', entityId: perception.entityId, resource, qty, price: mp.price, buyerId });
         return { success: true, snapshot, price: mp.price };
       } catch (tradeErr) {
         await client.query('ROLLBACK');
+        recordMetric('failedActions', 1);
+        logEvent({ type: 'trade', action: 'sell', entityId: perception.entityId, resource, qty, reason: 'trade_failed', err: tradeErr && tradeErr.message });
         return { success: false, reason: 'trade_failed', err: tradeErr && tradeErr.message };
       }
 
@@ -154,9 +186,13 @@ async function executeTradeAction(pool, action, perception, opts = {}) {
       try {
         const snapshot = await marketService.tradeWithClient(client, perception.entityId, sellerId, resource, mp.price, qty);
         await client.query('COMMIT');
+        recordMetric('actionsExecuted', 1); recordMetric('successfulTrades', 1);
+        logEvent({ type: 'trade', action: 'buy', entityId: perception.entityId, resource, qty, price: mp.price, sellerId });
         return { success: true, snapshot, price: mp.price };
       } catch (tradeErr) {
         await client.query('ROLLBACK');
+        recordMetric('failedActions', 1);
+        logEvent({ type: 'trade', action: 'buy', entityId: perception.entityId, resource, qty, reason: 'trade_failed', err: tradeErr && tradeErr.message });
         return { success: false, reason: 'trade_failed', err: tradeErr && tradeErr.message };
       }
     }
@@ -363,11 +399,15 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       console.warn('[AI v2] Failed to update population bucket after building:', e && e.message);
     }
 
-    await client.query('COMMIT');
-    return { success: true, built: buildingId };
+  await client.query('COMMIT');
+  recordMetric('actionsExecuted', 1); recordMetric('successfulBuilds', 1);
+  logEvent({ type: 'build', action: 'complete', entityId, buildingId });
+  return { success: true, built: buildingId };
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (er) { /* ignore */ }
-    return { success: false, reason: 'exception', err: e && e.message };
+  recordMetric('failedActions', 1);
+  logEvent({ type: 'build', action: 'failed', entityId, buildingId, err: e && e.message });
+  return { success: false, reason: 'exception', err: e && e.message };
   } finally {
     try { client.release(); } catch (ee) { /* ignore */ }
   }
@@ -391,6 +431,10 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     console.error('[AI v2] perceiveSnapshot failed for', cityId, e && e.message);
     return { success: false, error: 'perceive_failed' };
   }
+
+  recordMetric('ticksRun', 1);
+  recordMetric('citiesProcessed', 1);
+  metrics.lastRunAt = Date.now();
 
   // Plan trades
   const tradeActions = tradePlanner(perception, { maxTradesPerTick: opts.maxTradesPerTick, baseBuyDiv: opts.baseBuyDiv, baseSellDiv: opts.baseSellDiv });
@@ -430,7 +474,9 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     }
   }
 
-  return { success: true, cityId, acted: execResults.some(r => r.success || (r.result && r.result.success)), results: execResults };
+  const acted = execResults.some(r => r.success || (r.result && r.result.success));
+  logEvent({ type: 'city_tick_summary', entityId: cityId, acted, results: execResults });
+  return { success: true, cityId, acted, results: execResults };
 }
 
 async function runBatch(pool, options = {}) {
@@ -459,6 +505,8 @@ async function runBatch(pool, options = {}) {
     }
   }
   console.log('[AI v2] runBatch finished');
+  // log metrics summary
+  logEvent({ type: 'batch_summary', candidates: candidates.length, resultsCount: results.length, metrics: getMetrics() });
   return results;
 }
 
