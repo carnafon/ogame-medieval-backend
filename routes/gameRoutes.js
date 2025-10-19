@@ -233,14 +233,31 @@ router.post('/build', async (req, res) => {
             const newMax = newCalc.max || 0;
             await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.min(newMax, (newBreak.poor || 0) + 1), newMax, Math.max(0, newMax - (Math.min(newMax, (newBreak.poor || 0) + 1))));
         }
+        // If the built building is a house, increase poor.max_population
+        if (buildingType === 'house') {
+            try {
+                const gu = require('../utils/gameUtils');
+                const inc = gu.POPULATION_PER_HOUSE || 5;
+                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entity.id, 'poor']);
+                if (prow.rows.length > 0) {
+                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                    const avail = Math.max(0, maxv - cur);
+                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', cur, maxv, avail);
+                } else {
+                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', 0, inc, inc);
+                }
+            } catch (e) {
+                console.warn('Failed to update house population bucket (poor):', e.message);
+            }
+        }
+
+        // recompute popSummary for response (centralized helper) inside the transaction
+        const finalPopSummary = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
 
         await client.query('COMMIT');
 
         // 7️⃣ Enviar respuesta completa al frontend
-        // recompute popSummary for response (centralized helper)
-        const finalPopSummary = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
-        await client.query('COMMIT');
-
         res.status(200).json({
             message: `Construcción de ${buildingType} completada.`,
             entity: {
