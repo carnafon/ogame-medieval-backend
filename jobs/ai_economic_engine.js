@@ -430,10 +430,16 @@ async function runEconomicUpdate(pool) {
                     // Trading heuristics
                     const RADIUS = 8;
                     const MAX_TRADES_PER_TICK = 3;
-                    const BUY_LOW = 120;
-                    const SELL_HIGH = 500;
-                    const SAFETY_STOCK = 50;
+                    // We'll compute per-resource thresholds from resource_types.price_base
+                    const BASE_BUY_DIV = 120;   // buy threshold = BASE_BUY_DIV / price_base
+                    const BASE_SELL_DIV = 500;  // sell threshold = BASE_SELL_DIV / price_base
+                    const SAFETY_STOCK = 500;
                     const MAX_AMOUNT = 100;
+
+                    // Load price_base for all resource types once and use to compute per-resource thresholds.
+                    const ptResAll = await client.query('SELECT lower(name) as name, price_base FROM resource_types');
+                    const priceBaseMap = {};
+                    for (const r of ptResAll.rows) priceBaseMap[r.name] = Number(r.price_base) || 1;
 
                     // Load this entity coords and resources
                     const entRowRes = await client.query('SELECT x_coord, y_coord FROM entities WHERE id = $1', [entityId]);
@@ -453,15 +459,17 @@ async function runEconomicUpdate(pool) {
                         for (const [resName, curAmt] of Object.entries(myResources)) {
                             if (tradesDone >= MAX_TRADES_PER_TICK) break;
                             if (resName === 'gold') continue;
-                            if (curAmt >= BUY_LOW) continue;
-                            const need = Math.min(MAX_AMOUNT, BUY_LOW - curAmt);
+                            const base = priceBaseMap[resName] || 1;
+                            const buyLow = Math.max(1, Math.round(BASE_BUY_DIV / base));
+                            if (curAmt >= buyLow) continue;
+                            const need = Math.min(MAX_AMOUNT, buyLow - curAmt);
                             for (const nb of nearby) {
                                 if (tradesDone >= MAX_TRADES_PER_TICK) break;
                                 try {
                                     const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resName]);
                                     const sellerStock = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
                                     console.log(`[AI Engine] Trade attempt BUY: entity=${entityId} needs ${need} of ${resName}; seller=${nb.id} stock=${sellerStock}`);
-                                    if (sellerStock <= SAFETY_STOCK) continue;
+                                        if (sellerStock <= SAFETY_STOCK) continue;
                                     const availableToSell = Math.min(need, Math.max(0, sellerStock - SAFETY_STOCK));
                                     if (availableToSell <= 0) continue;
                                     const mp = await marketService.computeMarketPriceSingle(client, resName, availableToSell, 'buy');
@@ -469,7 +477,7 @@ async function runEconomicUpdate(pool) {
                                         console.log(`[AI Engine] computeMarketPriceSingle returned null for ${resName}`);
                                         continue;
                                     }
-                                    const qty = Math.min(availableToSell, MAX_AMOUNT);
+                                        const qty = Math.min(availableToSell, MAX_AMOUNT);
                                     try {
                                         await marketService.tradeWithClient(client, entityId, nb.id, resName, mp.price, qty);
                                         console.log(`[AI Engine][Trade] entity ${entityId} bought ${qty} ${resName} from ${nb.id} at ${mp.price} each`);
@@ -488,16 +496,19 @@ async function runEconomicUpdate(pool) {
                             for (const [resName, curAmt] of Object.entries(myResources)) {
                                 if (tradesDone >= MAX_TRADES_PER_TICK) break;
                                 if (resName === 'gold') continue;
-                                if (curAmt <= SELL_HIGH) continue;
-                                const surplus = curAmt - SELL_HIGH;
+                                const base = priceBaseMap[resName] || 1;
+                                const buyLow = Math.max(1, Math.round(BASE_BUY_DIV / base));
+                                const sellHigh = Math.max(buyLow + 1, Math.round(BASE_SELL_DIV / base));
+                                if (curAmt <= sellHigh) continue;
+                                const surplus = curAmt - sellHigh;
                                 for (const nb of nearby) {
                                     if (tradesDone >= MAX_TRADES_PER_TICK) break;
                                     try {
                                         const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resName]);
                                         const neighborAmt = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
                                         console.log(`[AI Engine] Trade attempt SELL: entity=${entityId} has surplus=${surplus} of ${resName}; neighbor=${nb.id} amt=${neighborAmt}`);
-                                        if (neighborAmt >= BUY_LOW) continue;
-                                        const wanted = Math.min(MAX_AMOUNT, BUY_LOW - neighborAmt);
+                                        if (neighborAmt >= buyLow) continue;
+                                        const wanted = Math.min(MAX_AMOUNT, buyLow - neighborAmt);
                                         const toSell = Math.min(surplus, wanted);
                                         if (toSell <= 0) continue;
                                         const mp = await marketService.computeMarketPriceSingle(client, resName, toSell, 'sell');
