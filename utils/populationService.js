@@ -103,31 +103,56 @@ async function setPopulationForTypeWithClient(client, entityId, type, currentPop
 
 // --- New helpers for occupation/available calculation ---
 
-// factorial with small cap to avoid huge numbers
-function factorial(n) {
-  const num = Math.max(0, Math.floor(Number(n) || 0));
-  const cap = 10; // avoid extremely large factorials
-  const upto = Math.min(num, cap);
-  let r = 1;
-  for (let i = 2; i <= upto; i++) r *= i;
-  return r;
-}
-
 /**
- * Compute occupation from an array of building objects.
- * Each building contributes factorial(level) where level is building.level if present,
- * otherwise building.count is used as a fallback. Non-numeric levels/counts are treated as 0.
- * buildings: [{ type, level?, count?, ... }, ...]
+ * Compute occupation per population bucket from grouped building rows.
+ * Input: buildings = [{ type, level, count }, ...] where level and count are strings/numbers from SQL.
+ * Rule: occupation contribution = level * count for the building (houses are ignored).
+ * The building's produced resources are used to infer which population bucket it consumes:
+ *  - 'common' -> 'poor'
+ *  - 'processed' -> 'burgess'
+ *  - 'specialized' -> 'patrician'
+ * We use gameUtils.PRODUCTION_RATES and gameUtils.RESOURCE_CATEGORIES to infer mapping.
+ * Returns an object: { poor: number, burgess: number, patrician: number, total: number }
  */
+const gameUtils = require('./gameUtils');
 function computeOccupationFromBuildings(buildings = []) {
-  if (!Array.isArray(buildings)) return 0;
-  let occupation = 0;
+  const occupation = { poor: 0, burgess: 0, patrician: 0 };
+  if (!Array.isArray(buildings)) return occupation;
+
+  const prodRates = gameUtils.PRODUCTION_RATES || {};
+  const resourceCategories = gameUtils.RESOURCE_CATEGORIES || {};
+
   for (const b of buildings) {
-    if (!b) continue;
-    const lvl = Number.isFinite(Number(b.level)) ? Number(b.level) : (Number.isFinite(Number(b.count)) ? Number(b.count) : 0);
-    if (lvl <= 0) continue;
-    occupation += factorial(lvl);
+    if (!b || !b.type) continue;
+    const type = (b.type || '').toString();
+    if (type === 'house') continue; // houses provide capacity, don't consume population
+    const lvl = Number.isFinite(Number(b.level)) ? Number(b.level) : 0;
+    const cnt = Number.isFinite(Number(b.count)) ? Number(b.count) : 1;
+    if (lvl <= 0 || cnt <= 0) continue;
+    const contrib = lvl * cnt;
+
+    // determine building category by inspecting what it produces
+    const rates = prodRates[type] || {};
+    let mapped = null;
+    for (const res of Object.keys(rates)) {
+      const cat = resourceCategories[res];
+      if (!cat) continue;
+      if (cat === 'common') { mapped = 'poor'; break; }
+      if (cat === 'processed') { mapped = 'burgess'; break; }
+      if (cat === 'specialized') { mapped = 'patrician'; break; }
+    }
+
+    // fallback: if no produced resource found, try heuristics by name
+    if (!mapped) {
+      if (type.includes('well') || type.includes('farm') || type.includes('sawmill') || type.includes('quarry')) mapped = 'poor';
+      else if (type.includes('carpinter') || type.includes('fabrica') || type.includes('alfareria') || type.includes('tintoreria')) mapped = 'burgess';
+      else mapped = 'poor';
+    }
+
+    occupation[mapped] = (occupation[mapped] || 0) + contrib;
   }
+
+  occupation.total = (occupation.poor || 0) + (occupation.burgess || 0) + (occupation.patrician || 0);
   return occupation;
 }
 
@@ -138,19 +163,36 @@ function computeOccupationFromBuildings(buildings = []) {
 async function calculateAvailablePopulation(entityId) {
   const client = await pool.connect();
   try {
-    // get population totals
-    const pop = await getPopulationSummaryWithClient(client, entityId);
-    const current = pop.total || 0;
+    // get per-type population rows
+    const pres = await client.query('SELECT type, current_population, max_population, available_population FROM populations WHERE entity_id = $1', [entityId]);
+    const breakdown = { poor: 0, burgess: 0, patrician: 0 };
+    const maxBreak = { poor: 0, burgess: 0, patrician: 0 };
+    let total = 0;
+    let maxTotal = 0;
+    for (const r of pres.rows) {
+      const t = (r.type || '').toLowerCase();
+      if (!Object.prototype.hasOwnProperty.call(breakdown, t)) continue;
+      const cur = parseInt(r.current_population || 0, 10);
+      const m = parseInt(r.max_population || 0, 10);
+      breakdown[t] = cur;
+      maxBreak[t] = m;
+      total += cur;
+      maxTotal += m;
+    }
 
-    // get buildings for entity
-  const bres = await client.query(`SELECT type, MAX(level) AS level, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type`, [entityId]);
+    // get buildings grouped
+    const bres = await client.query(`SELECT type, MAX(level) AS level, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type`, [entityId]);
     const buildings = Array.isArray(bres.rows) ? bres.rows : [];
+    const occupationPerType = computeOccupationFromBuildings(buildings);
 
-    const occupation = computeOccupationFromBuildings(buildings);
-    // New rule: available population = current_population - occupation (factorial-derived)
-    // Clamp at 0 so populations never go negative
-    const available = Math.max(0, current - occupation);
-    return { entityId, current, occupation, available };
+    // available per type = current_population_of_type - occupation_of_type
+    const avail = {};
+    for (const t of ['poor','burgess','patrician']) {
+      avail[t] = Math.max(0, (breakdown[t] || 0) - (occupationPerType[t] || 0));
+    }
+
+    const available = (avail.poor || 0) + (avail.burgess || 0) + (avail.patrician || 0);
+    return { entityId, current: total, occupation: occupationPerType, available, breakdown, max: maxTotal };
   } finally {
     client.release();
   }
@@ -171,7 +213,13 @@ async function calculateAvailablePopulationWithClient(client, entityId) {
   const bres = await client.query(`SELECT type, MAX(level) AS level, COUNT(*) AS count FROM buildings WHERE entity_id = $1 GROUP BY type`, [entityId]);
   const buildings = Array.isArray(bres.rows) ? bres.rows : [];
   const occupation = computeOccupationFromBuildings(buildings);
-  const available = Math.max(0, current - occupation);
+
+  const avail = {};
+  for (const t of ['poor','burgess','patrician']) {
+    avail[t] = Math.max(0, (breakdown[t] || 0) - (occupation[t] || 0));
+  }
+
+  const available = (avail.poor || 0) + (avail.burgess || 0) + (avail.patrician || 0);
   return { entityId, current, occupation, available, breakdown, total: current, max };
 }
 
