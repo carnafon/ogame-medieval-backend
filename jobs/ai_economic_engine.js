@@ -36,6 +36,21 @@ function calculateUpgradeRequirementsFromConstants(buildingType, currentLevel) {
     };
 }
 
+// Dynamic producer lookup using PRODUCTION_RATES in gameUtils
+const gameUtils = require('../utils/gameUtils');
+function findProducerForResource(resourceName) {
+    if (!resourceName) return null;
+    const key = resourceName.toString().toLowerCase();
+    const prodRates = gameUtils.PRODUCTION_RATES || {};
+    // Search for a building that has a positive production rate for this resource
+    for (const [building, rates] of Object.entries(prodRates)) {
+        if (rates && Object.prototype.hasOwnProperty.call(rates, key) && Number(rates[key]) > 0) return building;
+    }
+    // fallback: try some well-known mappings
+    const FALLBACK = { wood: 'sawmill', stone: 'quarry', food: 'farm', lumber: 'carpinteria', baked_brick: 'fabrica_ladrillos', linen: 'lineria' };
+    return FALLBACK[key] || null;
+}
+
 /**
  * Procesa la lógica económica (construcción, producción, comercio) para todas las ciudades IA.
  * @param {object} pool - Instancia de la conexión a PostgreSQL (pg.Pool).
@@ -181,6 +196,49 @@ async function runEconomicUpdate(pool) {
 
                                 if (!hasEnough) {
                                     console.log(`[AI Engine] entity=${entityId} lacks resources for ${bestUpgrade}:`, missing);
+                                    // Try to find a producer building for the first missing resource and prefer upgrading it
+                                    try {
+                                        const missingKeys = Object.keys(missing || {});
+                                        if (missingKeys.length > 0) {
+                                            const producer = findProducerForResource(missingKeys[0]);
+                                            if (producer && producer !== bestUpgrade && BUILDING_COSTS[producer]) {
+                                                console.log(`[AI Engine] entity=${entityId} will try to upgrade producer ${producer} for missing resource ${missingKeys[0]}`);
+                                                // set as candidate and compute its requirements
+                                                const prodCurLevel = runtimeBuildings[producer] || 0;
+                                                const prodReqs = calculateUpgradeRequirementsFromConstants(producer, prodCurLevel);
+                                                if (prodReqs) {
+                                                    // Check pop & resources quickly (using currentResources snapshot)
+                                                    const prodPopNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
+                                                    if ((calc.total || 0) >= prodPopNeeded) {
+                                                        // determine if we have enough resources to upgrade producer
+                                                        let enoughForProducer = true;
+                                                        for (const r in prodReqs.requiredCost) {
+                                                            if ((currentResources[r] || 0) < prodReqs.requiredCost[r]) { enoughForProducer = false; break; }
+                                                        }
+                                                        if (enoughForProducer) {
+                                                            console.log(`[AI Engine] entity=${entityId} switching build target to producer ${producer}`);
+                                                            // set bestUpgrade to producer and reuse its reqs in the build flow
+                                                            bestUpgrade = producer;
+                                                            lowestLevel = prodCurLevel;
+                                                            // override reqs so subsequent code will build it
+                                                            // Note: we don't re-run the loop; just let next section see hasEnough true
+                                                            for (const r in prodReqs.requiredCost) {
+                                                                // no-op: keeping structure; actual deduction will use prodReqs
+                                                            }
+                                                            // Reassign reqs variable used below by simple shadowing
+                                                            reqs.requiredCost = prodReqs.requiredCost;
+                                                            reqs.nextLevel = prodReqs.nextLevel;
+                                                            reqs.popForNextLevel = prodReqs.popForNextLevel;
+                                                            reqs.currentPopRequirement = prodReqs.currentPopRequirement;
+                                                            hasEnough = true; // force building producer
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (pe) {
+                                        console.warn('[AI Engine] error while selecting producer for missing resource', pe.message);
+                                    }
                                 }
 
                                 if (hasEnough) {
