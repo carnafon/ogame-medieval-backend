@@ -18,7 +18,7 @@ const { BUILDING_COSTS } = require('../constants/buildings');
 // Default trading parameters
 const DEFAULTS = {
   MAX_NEIGHBORS: 8,
-  MAX_TRADES_PER_TICK: 3,
+  MAX_TRADES_PER_TICK: 60,
   MAX_AMOUNT: 100,
   SAFETY_STOCK: 200,
   PROFIT_MARGIN: 1.05, // only sell if market price >= base * PROFIT_MARGIN
@@ -253,6 +253,23 @@ async function buildPlanner(perception, pool, opts = {}) {
   const candidates = [];
   const prodRatesAll = gameUtils.PRODUCTION_RATES || {};
 
+  // compute population stats for consumption
+  let populationStats = { current_population: 0 };
+  try {
+    const prow = await pool.query('SELECT type, current_population, max_population FROM populations WHERE entity_id = $1', [entityId]);
+    if (prow.rows && prow.rows.length > 0) {
+      let total = 0;
+      prow.rows.forEach(r => { total += Number(r.current_population || 0); });
+      populationStats.current_population = total;
+    }
+  } catch (e) {
+    // leave defaults if query fails
+  }
+
+  // compute current net production per tick (includes consumption)
+  const productionPerTick = gameUtils.calculateProduction(buildingRows, populationStats) || {};
+  const horizonSeconds = opts.horizonSeconds || (gameUtils.TICK_SECONDS * 6); // default 6 ticks
+
   for (const buildingId of Object.keys(BUILDING_COSTS)) {
     const currentLevel = runtimeBuildings[buildingId] || 0;
     const reqs = calculateUpgradeRequirementsFromConstants(buildingId, currentLevel);
@@ -266,21 +283,54 @@ async function buildPlanner(perception, pool, opts = {}) {
       costGold += amt * base;
     }
 
-    // estimate marginal production value per tick
+    // estimate marginal production value per tick (pre-adjust)
     const rates = prodRatesAll[buildingId] || {};
-    let valueSum = 0;
+    let rawValueSum = 0;
     for (const res of Object.keys(rates)) {
       const rate = Number(rates[res]) || 0;
       const base = priceBaseMap[res] || 1;
-      valueSum += rate * base; // per level estimate
+      rawValueSum += rate * base; // per level estimate
     }
-    if (valueSum <= 0) continue; // skip non-producer buildings for now
-      if (valueSum <= 0) {
-        logEvent({ type: 'build_candidate_skipped', entityId, buildingId, reason: 'no_production_value', valueSum, priceBaseMap });
-        continue;
-      }
+    if (rawValueSum <= 0) {
+      logEvent({ type: 'build_candidate_skipped', entityId, buildingId, reason: 'no_production_value', valueSum: rawValueSum, priceBaseMap });
+      continue; // skip non-producer buildings for now
+    }
 
-    const payback = costGold / Math.max(1, valueSum);
+    // Adjust valueSum based on current stock and consumption urgency
+    let adjustedValueSum = rawValueSum;
+    try {
+      const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
+      const multiplierParts = [];
+      for (const res of Object.keys(rates)) {
+        const produces = Number(rates[res]) || 0;
+        // projected net production over horizon
+        const netPerTick = Number(productionPerTick[res] || 0);
+        const projectedNet = netPerTick * (horizonSeconds / gameUtils.TICK_SECONDS);
+        const curStock = Number(perception.inventory[res] || 0);
+
+        // If projected net is negative (deficit) or stock low => increase value
+        if (projectedNet < 0 || curStock < SAFETY) {
+          const deficit = Math.max(0, -projectedNet);
+          const stockGap = Math.max(0, SAFETY - curStock);
+          // urgency: deficit relative to safety and current stock
+          const urgency = 1 + Math.min(4, (stockGap / Math.max(1, SAFETY)) + (deficit / Math.max(1, SAFETY)));
+          multiplierParts.push(urgency);
+        } else if (curStock > SAFETY * 3) {
+          // overstock -> reduce immediate value
+          multiplierParts.push(0.5);
+        } else {
+          multiplierParts.push(1);
+        }
+      }
+      // combine multipliers (geometric mean-ish)
+      const combined = multiplierParts.reduce((a, b) => a * b, 1) ** (1 / Math.max(1, multiplierParts.length));
+      adjustedValueSum = rawValueSum * combined;
+    } catch (e) {
+      // fallback to raw value
+      adjustedValueSum = rawValueSum;
+    }
+
+    const payback = costGold / Math.max(1, adjustedValueSum);
 
     // determine target population bucket and simple population check (current < max)
     const bucket = mapBuildingToPopulationBucket(buildingId);
@@ -298,7 +348,7 @@ async function buildPlanner(perception, pool, opts = {}) {
 
     const hasCapacity = (perTypeMax === null) || (perTypeCurrent < perTypeMax) || buildingId.startsWith('house') || buildingId === 'house';
 
-    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum, payback, bucket, hasCapacity });
+    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity });
   }
 
   // prefer candidates with hasCapacity true and lower payback
