@@ -54,6 +54,10 @@ async function runEconomicUpdate(pool) {
             const entityId = entRes.rows[0].entity_id;
             console.log(`[AI Engine] --- Processing AI city id=${ai.id} -> entity=${entityId}`);
 
+            const random = Math.random();
+            //Sacamos un random para ver si procesamos esta ciudad o no. Si sale menos de 0.3, la procesamos.
+            if (random < 0.3) {
+
             const client = await pool.connect();
             try {
                 await client.query('BEGIN');
@@ -386,6 +390,7 @@ async function runEconomicUpdate(pool) {
                 client.release();
             }
         }
+    }
 
         console.log(`[AI Engine] Actualización económica finalizada con éxito.`);
     } catch (err) {
