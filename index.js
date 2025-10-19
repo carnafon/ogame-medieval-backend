@@ -82,17 +82,51 @@ app.post('/api/run-scheduled-job', async (req, res) => {
                     p.then(r => { clearTimeout(t); resolve(r); }).catch(err => { clearTimeout(t); reject(err); });
                 });
 
-                let usedV2 = true;
-                if (preferred === '2' || (preferred === 'auto' && v2Percent > 0 && Math.random() * 100 < v2Percent)) {
+                let usedV2 = false;
+                let v2SkipReason = null;
+
+                // Decide whether to attempt v2
+                const roll = Math.random() * 100;
+                console.log('[WEB-CRON] AI selection: preferred=%s v2Percent=%s roll=%s', preferred, v2Percent, roll.toFixed(2));
+
+                const shouldConsiderV2 = (() => {
+                    if (preferred === '2') return true;
+                    if (preferred === '1') { v2SkipReason = 'preferred_v1'; return false; }
+                    // auto
+                    if (v2Percent <= 0) { v2SkipReason = 'v2_percent_zero'; return false; }
+                    if (roll < v2Percent) return true;
+                    v2SkipReason = `random_roll(${roll.toFixed(2)})_>=_${v2Percent}`;
+                    return false;
+                })();
+
+                if (shouldConsiderV2) {
                     try {
-                        console.log('[WEB-CRON] Running AI engine v2 (canary)');
+                        console.log('[WEB-CRON] Attempting to run AI engine v2 (canary)');
+                        // Check module presence early for clearer logs
+                        let ai2;
+                        try {
+                            ai2 = require('./jobs/ai_economic_engine_v2');
+                        } catch (modErr) {
+                            v2SkipReason = 'module_missing';
+                            throw new Error('AI v2 module not available');
+                        }
+                        if (!ai2 || typeof ai2.runBatch !== 'function') {
+                            v2SkipReason = 'module_interface_invalid';
+                            throw new Error('AI v2 missing runBatch');
+                        }
+
                         await promiseWithTimeout(tryRunV2(), AI_TIMEOUT_MS);
                         usedV2 = true;
-                        console.log('[WEB-CRON] AI v2 finished');
+                        console.log('[WEB-CRON] AI v2 finished successfully');
                     } catch (err) {
-                        console.error('[WEB-CRON] AI v2 failed or timed out:', err && err.message);
+                        // err may be module missing, timeout, or runtime error; log reason
+                        const msg = err && err.message ? err.message : String(err);
+                        console.error('[WEB-CRON] AI v2 failed or timed out:', msg);
+                        if (!v2SkipReason) v2SkipReason = `v2_error:${msg}`;
                         // fallback to v1 below
                     }
+                } else {
+                    console.log('[WEB-CRON] Skipping AI v2 - reason:', v2SkipReason);
                 }
 
                 if (!usedV2) {
