@@ -54,15 +54,57 @@ app.post('/api/run-scheduled-job', async (req, res) => {
 
             // También intentamos ejecutar la actualización económica de las ciudades IA
             try {
-                const aiEngine = require('./jobs/ai_economic_engine');
-                if (aiEngine && typeof aiEngine.runEconomicUpdate === 'function') {
-                    console.log('[WEB-CRON] Iniciando AI economic engine.');
-                    // runEconomicUpdate expects the DB pool
-                    await aiEngine.runEconomicUpdate(pool);
-                    console.log('[WEB-CRON] AI economic engine finalizado.');
-                } else {
-                    console.warn('[WEB-CRON] ai_economic_engine tiene formato inesperado, no se llamó.');
+                // Prefer v2 when configured; fallback to v1 on error/timeout
+                const preferred = process.env.AI_ENGINE_VERSION || 'auto'; // '1' | '2' | 'auto'
+                const v2Percent = Number(process.env.AI_V2_RUN_PERCENT || 0);
+                const AI_TIMEOUT_MS = Number(process.env.AI_TX_TIMEOUT_MS || 30000);
+
+                const tryRunV2 = async () => {
+                    try {
+                        const ai2 = require('./jobs/ai_economic_engine_v2');
+                        if (!ai2 || typeof ai2.runBatch !== 'function') throw new Error('v2 missing runBatch');
+                        // options: maxCitiesPerTick, runPercent
+                        const opts = { maxCitiesPerTick: Number(process.env.AI_MAX_CITIES_PER_TICK || 40), runPercent: v2Percent };
+                        return await ai2.runBatch(pool, opts);
+                    } catch (e) {
+                        throw e;
+                    }
+                };
+
+                const runV1 = async () => {
+                    const ai1 = require('./jobs/ai_economic_engine');
+                    if (!ai1 || typeof ai1.runEconomicUpdate !== 'function') throw new Error('v1 missing runEconomicUpdate');
+                    return await ai1.runEconomicUpdate(pool);
+                };
+
+                const promiseWithTimeout = (p, ms) => new Promise((resolve, reject) => {
+                    const t = setTimeout(() => reject(new Error('AI engine timeout')), ms);
+                    p.then(r => { clearTimeout(t); resolve(r); }).catch(err => { clearTimeout(t); reject(err); });
+                });
+
+                let usedV2 = false;
+                if (preferred === '2' || (preferred === 'auto' && v2Percent > 0 && Math.random() * 100 < v2Percent)) {
+                    try {
+                        console.log('[WEB-CRON] Running AI engine v2 (canary)');
+                        await promiseWithTimeout(tryRunV2(), AI_TIMEOUT_MS);
+                        usedV2 = true;
+                        console.log('[WEB-CRON] AI v2 finished');
+                    } catch (err) {
+                        console.error('[WEB-CRON] AI v2 failed or timed out:', err && err.message);
+                        // fallback to v1 below
+                    }
                 }
+
+                if (!usedV2) {
+                    try {
+                        console.log('[WEB-CRON] Running AI engine v1 (legacy)');
+                        await promiseWithTimeout(runV1(), AI_TIMEOUT_MS);
+                        console.log('[WEB-CRON] AI v1 finished');
+                    } catch (err) {
+                        console.error('[WEB-CRON] AI v1 failed or timed out:', err && err.message);
+                    }
+                }
+
             } catch (aiErr) {
                 // Log but don't fail the whole endpoint if AI engine has an issue
                 console.error('[WEB-CRON] Error ejecutando AI economic engine:', aiErr && aiErr.stack ? aiErr.stack : aiErr);
