@@ -115,24 +115,37 @@ async function processEntity(entityId, options) {
             const tryConsumeForType = (typeKey, resourceKeys) => {
                 const cur = popMap[typeKey]?.current || 0;
                 const max = popMap[typeKey]?.max || 0;
-                if (cur <= 0) return { newCurrent: cur, max };
 
-                const required = cur; // each citizen consumes 1 unit of each listed resource
-                const allHave = resourceKeys.every(k => (newResources[k] || 0) >= required);
-                if (!allHave) {
-                    // Not enough: decrement population by 1
+                // Helper to check availability of n units for each key
+                const haveNEach = (n) => resourceKeys.length > 0 && resourceKeys.every(k => (newResources[k] || 0) >= n);
+
+                // If there is currently no population of this type, allow growth by consuming 1 of each resource
+                if (cur <= 0) {
+                    if (max > 0 && haveNEach(1)) {
+                        // Consume 1 of each and create 1 population
+                        resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                        return { newCurrent: 1, max };
+                    }
+                    return { newCurrent: 0, max };
+                }
+
+                // Maintenance: each existing citizen consumes 1 unit each
+                const required = cur;
+                if (!haveNEach(required)) {
+                    // Not enough for full maintenance: lose one population unit
                     const newCur = Math.max(0, cur - 1);
                     return { newCurrent: newCur, max };
                 }
 
-                // Consume resources
-                resourceKeys.forEach(k => {
-                    newResources[k] = Math.max(0, (newResources[k] || 0) - required);
-                });
+                // Consume maintenance resources
+                resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - required); });
 
-                // If there is spare capacity (max - cur > 0) then population increases by 1
+                // Growth: if capacity and at least 1 unit of each resource remains, grow by 1
                 let newCur = cur;
-                if ((max - cur) > 0) newCur = Math.min(max, cur + 1);
+                if ((max - cur) > 0 && haveNEach(1)) {
+                    resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                    newCur = Math.min(max, cur + 1);
+                }
                 return { newCurrent: newCur, max };
             };
 

@@ -57,7 +57,7 @@ async function runEconomicUpdate(pool) {
             const random = Math.random();
             //Sacamos un random para ver si procesamos esta ciudad o no. Si sale menos de 0.3, la procesamos.
             if (random < 0.3) {
-
+                console.log(`[AI Engine] Processing entity=${entityId} (random=${random.toFixed(3)})`);
             const client = await pool.connect();
             try {
                 await client.query('BEGIN');
