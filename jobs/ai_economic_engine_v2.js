@@ -275,6 +275,10 @@ async function buildPlanner(perception, pool, opts = {}) {
       valueSum += rate * base; // per level estimate
     }
     if (valueSum <= 0) continue; // skip non-producer buildings for now
+      if (valueSum <= 0) {
+        logEvent({ type: 'build_candidate_skipped', entityId, buildingId, reason: 'no_production_value', valueSum, priceBaseMap });
+        continue;
+      }
 
     const payback = costGold / Math.max(1, valueSum);
 
@@ -303,6 +307,12 @@ async function buildPlanner(perception, pool, opts = {}) {
     return a.payback - b.payback;
   });
 
+  if (!candidates || candidates.length === 0) {
+    logEvent({ type: 'build_planner_no_candidates', entityId, reason: 'no_viable_candidates', priceBaseMap });
+  } else {
+    logEvent({ type: 'build_planner_candidates', entityId, count: candidates.length, top: candidates[0] });
+  }
+
   return candidates;
 }
 
@@ -326,8 +336,11 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
     for (const r in reqs.requiredCost) {
       const needAmt = reqs.requiredCost[r] || 0;
       if ((currentResources[r] || 0) < needAmt) {
+        // detailed missing resources log
+        const have = (currentResources[r] || 0);
+        logEvent({ type: 'build_failed_insufficient_resources', entityId, buildingId, resource: r, need: needAmt, have });
         await client.query('ROLLBACK');
-        return { success: false, reason: 'insufficient_resources' };
+        return { success: false, reason: 'insufficient_resources', resource: r, need: needAmt, have };
       }
     }
 
@@ -339,8 +352,9 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
         const cur = Number(prow.rows[0].current_population || 0);
         const maxv = Number(prow.rows[0].max_population || 0);
         if (cur >= maxv) {
+          logEvent({ type: 'build_failed_population_capacity', entityId, buildingId, bucket, current: cur, max: maxv });
           await client.query('ROLLBACK');
-          return { success: false, reason: 'population_capacity' };
+          return { success: false, reason: 'population_capacity', bucket, current: cur, max: maxv };
         }
       }
     }
@@ -350,6 +364,7 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       const amount = reqs.requiredCost[r] || 0;
       if (amount <= 0) continue;
       await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE lower(name) = $3)`, [amount, entityId, r.toString().toLowerCase()]);
+      logEvent({ type: 'build_deduct_resource', entityId, buildingId, resource: r, amount });
     }
 
     // Persist building level increment
@@ -455,6 +470,14 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
 
   // Simple policy: If bestBuild exists and has payback < threshold (e.g., 200) and hasCapacity, prefer build.
   const PAYBACK_THRESHOLD = opts.paybackThreshold || 200;
+  if (bestBuild) {
+    if (!bestBuild.hasCapacity) {
+      logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
+    } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
+      logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
+    }
+  }
+
   if (bestBuild && bestBuild.hasCapacity && bestBuild.payback <= PAYBACK_THRESHOLD) {
     // attempt build
     const bres = await executeBuildAction(pool, bestBuild, perception, {});
