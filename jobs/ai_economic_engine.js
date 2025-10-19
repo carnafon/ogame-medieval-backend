@@ -270,10 +270,48 @@ async function runEconomicUpdate(pool) {
                                     }
 
                                     console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
+                                        // Update population buckets for house-type buildings to increase capacity
+                                        try {
+                                            const gu = require('../utils/gameUtils');
+                                            const inc = gu.POPULATION_PER_HOUSE || 5;
+                                            if (bestUpgrade === 'casa_de_piedra') {
+                                                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'burgess']);
+                                                if (prow.rows.length > 0) {
+                                                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                                                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                                    const avail = Math.max(0, maxv - cur);
+                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
+                                                } else {
+                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', 0, inc, inc);
+                                                }
+                                            } else if (bestUpgrade === 'casa_de_ladrillos') {
+                                                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'patrician']);
+                                                if (prow.rows.length > 0) {
+                                                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                                                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                                    const avail = Math.max(0, maxv - cur);
+                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
+                                                } else {
+                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', 0, inc, inc);
+                                                }
+                                            } else if (bestUpgrade === 'house') {
+                                                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'poor']);
+                                                if (prow.rows.length > 0) {
+                                                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                                                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                                    const avail = Math.max(0, maxv - cur);
+                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', cur, maxv, avail);
+                                                } else {
+                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', 0, inc, inc);
+                                                }
+                                            }
+                                        } catch (e) {
+                                            console.warn('[AI Engine] Failed to update house population bucket:', e.message);
+                                        }
 
-                                    // No manual "release" of population needed. `current_population` represents people present
-                                    // and occupation will change as buildings change. Keep population updates centralised in
-                                    // populationService/resourceGenerator flows.
+                                        // No manual "release" of population needed. `current_population` represents people present
+                                        // and occupation will change as buildings change. Keep population updates centralised in
+                                        // populationService/resourceGenerator flows.
                                 }
                             }
                         }
@@ -544,6 +582,45 @@ async function completeConstruction(client, ai, entityRow) {
     newBuildings[building_id] = level_to_upgrade;
     const newRuntime = Object.assign({}, runtime, { buildings: newBuildings, current_construction: null });
     await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [newRuntime, entityRow.id]);
+
+    // If the building completed is a house-type, update the corresponding population max bucket
+    try {
+        const gu = require('../utils/gameUtils');
+        const inc = gu.POPULATION_PER_HOUSE || 5;
+        if (building_id === 'casa_de_piedra') {
+            const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityRow.id, 'burgess']);
+            if (prow.rows.length > 0) {
+                const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                const avail = Math.max(0, maxv - cur);
+                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'burgess', cur, maxv, avail);
+            } else {
+                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'burgess', 0, inc, inc);
+            }
+        } else if (building_id === 'casa_de_ladrillos') {
+            const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityRow.id, 'patrician']);
+            if (prow.rows.length > 0) {
+                const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                const avail = Math.max(0, maxv - cur);
+                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'patrician', cur, maxv, avail);
+            } else {
+                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'patrician', 0, inc, inc);
+            }
+        } else if (building_id === 'house') {
+            const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityRow.id, 'poor']);
+            if (prow.rows.length > 0) {
+                const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                const avail = Math.max(0, maxv - cur);
+                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'poor', cur, maxv, avail);
+            } else {
+                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'poor', 0, inc, inc);
+            }
+        }
+    } catch (e) {
+        console.warn('[AI Engine] Failed to update populations on construction complete:', e.message);
+    }
 
     console.log(`[AI Engine] ✅ Construcción finalizada en entity ${entityRow.id}: ${building_id} Nivel ${level_to_upgrade}.`);
 }
