@@ -97,6 +97,11 @@ async function runEconomicUpdate(pool) {
             try {
                 await client.query('BEGIN');
 
+                // Load resource price_base map once for heuristics (used by build and trade phases)
+                const ptAllTop = await client.query('SELECT lower(name) as name, price_base FROM resource_types');
+                const priceBaseMapTop = {};
+                for (const r of ptAllTop.rows) priceBaseMapTop[r.name] = Number(r.price_base) || 1;
+
                 // Compute production based on buildings and persist produced amounts to resource_inventory
                 try {
                     const buildings = await getBuildings(entityId);
@@ -150,9 +155,9 @@ async function runEconomicUpdate(pool) {
                     const runtimeBuildings = {};
                     curBuildings.forEach(b => { runtimeBuildings[b.type] = b.level || 0; });
 
-                    // choose building with lowest level using the same building list as normal players
+                    // choose building using a heuristic: prefer low-level AND buildings that produce high-value resources
                     let bestUpgrade = null;
-                    let lowestLevel = Infinity;
+                    let bestScore = Infinity; // lower score is better
 
                     // Load current resources (light read, no FOR UPDATE) to let AI prefer food buildings when starving
                     let currentResourcesLight = {};
@@ -173,10 +178,21 @@ async function runEconomicUpdate(pool) {
 
                     // Fallback: choose the globally lowest-level building
                     if (!bestUpgrade) {
+                        const prodRatesAll = gameUtils.PRODUCTION_RATES || {};
                         for (const buildingId of Object.keys(BUILDING_COSTS)) {
                             const currentLevel = runtimeBuildings[buildingId] || 0;
-                            if (currentLevel < lowestLevel) {
-                                lowestLevel = currentLevel;
+                            // compute value produced per tick in gold-equivalent using price_base
+                            const rates = prodRatesAll[buildingId] || {};
+                            let valueSum = 0;
+                            for (const res of Object.keys(rates)) {
+                                const rate = Number(rates[res]) || 0;
+                                const base = priceBaseMapTop[res] || 1;
+                                valueSum += rate * base;
+                            }
+                            // Score: level minus scaled valueSum (prefer buildings that increase gold production)
+                            const score = currentLevel - (valueSum / 10);
+                            if (score < bestScore) {
+                                bestScore = score;
                                 bestUpgrade = buildingId;
                             }
                         }
@@ -436,10 +452,8 @@ async function runEconomicUpdate(pool) {
                     const SAFETY_STOCK = 500;
                     const MAX_AMOUNT = 100;
 
-                    // Load price_base for all resource types once and use to compute per-resource thresholds.
-                    const ptResAll = await client.query('SELECT lower(name) as name, price_base FROM resource_types');
-                    const priceBaseMap = {};
-                    for (const r of ptResAll.rows) priceBaseMap[r.name] = Number(r.price_base) || 1;
+                    // Load price_base for all resource types (reuse mapping already loaded at top for heuristics)
+                    const priceBaseMap = priceBaseMapTop;
 
                     // Load this entity coords and resources
                     const entRowRes = await client.query('SELECT x_coord, y_coord FROM entities WHERE id = $1', [entityId]);
@@ -491,16 +505,25 @@ async function runEconomicUpdate(pool) {
                             }
                         }
 
-                        // Try to sell surpluses
+                        // Try to sell surpluses: prioritize high-value surplus resources to maximize gold
                         if (tradesDone < MAX_TRADES_PER_TICK) {
+                            // build candidate list of {resName, curAmt, surplus, base, score}
+                            const sellCandidates = [];
                             for (const [resName, curAmt] of Object.entries(myResources)) {
-                                if (tradesDone >= MAX_TRADES_PER_TICK) break;
                                 if (resName === 'gold') continue;
                                 const base = priceBaseMap[resName] || 1;
                                 const buyLow = Math.max(1, Math.round(BASE_BUY_DIV / base));
                                 const sellHigh = Math.max(buyLow + 1, Math.round(BASE_SELL_DIV / base));
                                 if (curAmt <= sellHigh) continue;
                                 const surplus = curAmt - sellHigh;
+                                // score by surplus * base (value of surplus)
+                                sellCandidates.push({ resName, curAmt, surplus, base, score: surplus * base, buyLow, sellHigh });
+                            }
+                            // sort descending by score (high value surplus first)
+                            sellCandidates.sort((a, b) => b.score - a.score);
+                            for (const cand of sellCandidates) {
+                                if (tradesDone >= MAX_TRADES_PER_TICK) break;
+                                const { resName, surplus, buyLow } = cand;
                                 for (const nb of nearby) {
                                     if (tradesDone >= MAX_TRADES_PER_TICK) break;
                                     try {
@@ -513,6 +536,12 @@ async function runEconomicUpdate(pool) {
                                         if (toSell <= 0) continue;
                                         const mp = await marketService.computeMarketPriceSingle(client, resName, toSell, 'sell');
                                         if (!mp) continue;
+                                        // Only sell if market price is at or above base to ensure profitable sale
+                                        const base = priceBaseMap[resName] || 1;
+                                        if (mp.price < base) {
+                                            console.log(`[AI Engine] Skipping sale of ${resName} because market price ${mp.price} < base ${base}`);
+                                            continue;
+                                        }
                                         try {
                                             await marketService.tradeWithClient(client, nb.id, entityId, resName, mp.price, toSell);
                                             console.log(`[AI Engine][Trade] entity ${entityId} sold ${toSell} ${resName} to ${nb.id} at ${mp.price} each`);
