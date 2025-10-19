@@ -2,6 +2,9 @@
 // Keep values aligned with frontend `frontend/src/constants/buildings.js`
 const BUILDING_COSTS = {
   house: { wood: 20, stone: 10, food: 5, popNeeded: 0 },
+  // Special housing variants that increase specific population buckets
+  casa_de_piedra: { lumber: 10, baked_brick: 5, popNeeded: 0 }, // increases burgess.max_population
+  casa_de_ladrillos: { magic_catalyst: 4, linen: 3, popNeeded: 0 }, // increases patrician.max_population
   sawmill: { wood: 50, stone: 30, food: 10, popNeeded: 1 },
   quarry: { wood: 40, stone: 80, food: 15 },
   quarry: { wood: 40, stone: 80, food: 15, popNeeded: 1 },

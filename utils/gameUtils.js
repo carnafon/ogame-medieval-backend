@@ -275,6 +275,11 @@ module.exports = {
     calculateProduction,
     calculateProductionForDuration,
     // Constantes exportadas
+    // Population constants
+    BASE_POPULATION,
+    POPULATION_PER_HOUSE,
+    FOOD_CONSUMPTION_PER_CITIZEN,
+    // Tick and generator constants
     TICK_SECONDS,
     RESOURCE_GENERATOR_INTERVAL_SECONDS,
     RESOURCE_GENERATOR_WOOD_PER_TICK,

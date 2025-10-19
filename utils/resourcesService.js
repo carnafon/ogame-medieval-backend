@@ -224,6 +224,60 @@ async function consumeResourcesWithClient(client, entityId, costs) {
   return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
 }
 
+// Generic consume that supports arbitrary resource keys (e.g., lumber, baked_brick)
+async function consumeResourcesWithClientGeneric(client, entityId, costs) {
+  // lock rows
+  const rows = await client.query(
+    `SELECT rt.name, ri.amount
+     FROM resource_inventory ri
+     JOIN resource_types rt ON ri.resource_type_id = rt.id
+     WHERE ri.entity_id = $1
+     FOR UPDATE`,
+    [entityId]
+  );
+
+  const current = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+
+  // Check sufficiency for all provided keys
+  for (const [k, need] of Object.entries(costs || {})) {
+    const key = (k || '').toString().toLowerCase();
+    const req = Number(need) || 0;
+    if ((current[key] || 0) < req) {
+      const err = new Error(`Recursos insuficientes: ${key} (necesita ${req}, tiene ${current[key] || 0})`);
+      err.code = 'INSUFFICIENT';
+      err.resource = key;
+      err.need = req;
+      err.have = current[key] || 0;
+      throw err;
+    }
+  }
+
+  // Perform updates
+  // Build a mapping name->id
+  const resTypes = await client.query(`SELECT id, lower(name) as name FROM resource_types`);
+  const nameToId = Object.fromEntries(resTypes.rows.map(r => [r.name, r.id]));
+
+  for (const [k, need] of Object.entries(costs || {})) {
+    const key = (k || '').toString().toLowerCase();
+    const req = Number(need) || 0;
+    if (req <= 0) continue;
+    if (!Object.prototype.hasOwnProperty.call(nameToId, key)) {
+      // unknown resource -> skip
+      continue;
+    }
+    await client.query(
+      `UPDATE resource_inventory SET amount = GREATEST(0, amount - $1) WHERE entity_id = $2 AND resource_type_id = $3`,
+      [req, entityId, nameToId[key]]
+    );
+  }
+
+  const updated = await client.query(
+    `SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
+    [entityId]
+  );
+  return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+}
+
 module.exports = {
   getResources,
   setResources,
@@ -235,3 +289,5 @@ module.exports = {
 module.exports.setResourcesWithClientGeneric = setResourcesWithClientGeneric;
 // Export resource type helper
 module.exports.getResourceTypeNames = getResourceTypeNames;
+// Export generic consumer
+module.exports.consumeResourcesWithClientGeneric = consumeResourcesWithClientGeneric;

@@ -117,7 +117,17 @@ router.post('/build', async (req, res) => {
             } catch (logErr) {
                 console.warn('Failed to read current resources for logging:', logErr.message);
             }
-            await require('../utils/resourcesService').consumeResourcesWithClient(client, entity.id, cost);
+            // Use generic consume when building cost uses arbitrary resource keys
+            const resourcesService = require('../utils/resourcesService');
+            // Map cost object to include only keys with positive amounts
+            const costToUse = Object.fromEntries(Object.entries(cost).filter(([k,v]) => Number(v) > 0));
+            // If cost contains keys other than wood/stone/food, use generic consumer
+            const nonStandard = Object.keys(costToUse).some(k => !['wood','stone','food'].includes(k));
+            if (nonStandard) {
+                await resourcesService.consumeResourcesWithClientGeneric(client, entity.id, costToUse);
+            } else {
+                await resourcesService.consumeResourcesWithClient(client, entity.id, costToUse);
+            }
         } catch (err) {
             if (err && err.code === 'INSUFFICIENT') {
                 await client.query('ROLLBACK');
@@ -165,6 +175,40 @@ router.post('/build', async (req, res) => {
             await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.max(0, currPop - 1), maxPop, Math.max(0, maxPop - (currPop - 1)));
         }
 
+        // If new building is one of the special houses, increase the appropriate population max bucket
+        try {
+            if (buildingType === 'casa_de_piedra') {
+                // Increases burgess.max_population by POPULATION_PER_HOUSE (use same constant as gameUtils)
+                const gu = require('../utils/gameUtils');
+                const inc = gu.POPULATION_PER_HOUSE || 5;
+                // read current burgess row
+                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entity.id, 'burgess']);
+                if (prow.rows.length > 0) {
+                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                    const avail = Math.max(0, maxv - cur);
+                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'burgess', cur, maxv, avail);
+                } else {
+                    // create row
+                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'burgess', 0, inc, inc);
+                }
+            } else if (buildingType === 'casa_de_ladrillos') {
+                const gu = require('../utils/gameUtils');
+                const inc = gu.POPULATION_PER_HOUSE || 5;
+                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entity.id, 'patrician']);
+                if (prow.rows.length > 0) {
+                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                    const avail = Math.max(0, maxv - cur);
+                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'patrician', cur, maxv, avail);
+                } else {
+                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'patrician', 0, inc, inc);
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to update special house population buckets:', e.message);
+        }
+
         // 6️⃣ Obtener entidad actualizada (población, recursos)
         const updatedEntityRes = await client.query('SELECT id, faction_id, x_coord, y_coord FROM entities WHERE id = $1', [entity.id]);
         const updatedEntity = updatedEntityRes.rows[0];
@@ -193,6 +237,10 @@ router.post('/build', async (req, res) => {
         await client.query('COMMIT');
 
         // 7️⃣ Enviar respuesta completa al frontend
+        // recompute popSummary for response (centralized helper)
+        const finalPopSummary = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
+        await client.query('COMMIT');
+
         res.status(200).json({
             message: `Construcción de ${buildingType} completada.`,
             entity: {
@@ -200,20 +248,19 @@ router.post('/build', async (req, res) => {
                 faction_id: updatedEntity.faction_id,
                 x_coord: updatedEntity.x_coord,
                 y_coord: updatedEntity.y_coord,
-                current_population: popSummary.total,
-                max_population: popSummary.max,
+                current_population: finalPopSummary.total,
+                max_population: finalPopSummary.max,
                 resources: updatedResources
             },
             buildings: updatedBuildings.rows,
             population: {
-                current_population: popSummary.total,
-                max_population: popSummary.max,
-                available_population: popSummary.available
+                current_population: finalPopSummary.total,
+                max_population: finalPopSummary.max,
+                available_population: finalPopSummary.available
             }
         });
-
     } catch (err) {
-        await client.query('ROLLBACK');
+        try { await client.query('ROLLBACK'); } catch (e) {}
         console.error('Error en construcción:', err.message);
         res.status(500).json({ message: 'Error en la construcción.', error: err.message });
     } finally {
