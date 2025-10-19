@@ -271,6 +271,8 @@ const calculateProductionForDuration = (userBuildings, populationStats, seconds)
 };
 
 module.exports = {
+    // Production rates (per-building)
+    PRODUCTION_RATES,
     calculatePopulationStats,
     calculateProduction,
     calculateProductionForDuration,
