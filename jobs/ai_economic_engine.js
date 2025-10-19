@@ -172,7 +172,12 @@ async function runEconomicUpdate(pool) {
                             const calc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
                             const availablePop = calc.available || 0;
                             const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
-                            if (availablePop >= popNeeded) {
+                            // Respect population semantics: `max_population` = capacity, `current_population` = people present,
+                            // `available` = current_population - occupation. Do NOT mutate current_population to "reserve" workers.
+                            // Allow house-type buildings (that increase capacity) to be built even when no available workers.
+                            const HOUSE_TYPES = ['house', 'casa_de_piedra', 'casa_de_ladrillos'];
+                            const isHouseType = HOUSE_TYPES.includes(bestUpgrade);
+                            if (availablePop >= popNeeded || isHouseType) {
                                 console.log(`[AI Engine] entity=${entityId} has available pop ${availablePop} and needs ${popNeeded} for ${bestUpgrade}`);
                                 // lock and read resource_inventory
                                 const rows = await client.query(
@@ -243,20 +248,8 @@ async function runEconomicUpdate(pool) {
 
                                 if (hasEnough) {
                                     console.log(`[AI Engine] entity=${entityId} has enough resources for ${bestUpgrade}`);
-                                    // Reserve population for the construction: decrement from 'poor' bucket if needed
-                                    try {
-                                        const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
-                                        if ((popNeeded || 0) > 0) {
-                                            const calcInner = await populationService.calculateAvailablePopulationWithClient(client, entityId);
-                                            const poorCur = Number(calcInner.breakdown && calcInner.breakdown.poor ? calcInner.breakdown.poor : 0);
-                                            const maxPop = Number(calcInner.max || 0);
-                                            const newPoorCur = Math.max(0, poorCur - popNeeded);
-                                            const newAvail = Math.max(0, maxPop - newPoorCur);
-                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', newPoorCur, maxPop, newAvail);
-                                        }
-                                    } catch (popReserveErr) {
-                                        console.warn('[AI Engine] failed to reserve population for build', popReserveErr.message);
-                                    }
+                                    // No population reservation step here: occupation is derived from buildings and will
+                                    // automatically reduce `available` once the building is persisted (after commit).
 
                                     // Deduct resources
                                     for (const resource in reqs.requiredCost) {
@@ -278,17 +271,9 @@ async function runEconomicUpdate(pool) {
 
                                     console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
 
-                                    // After building, recompute and release population back (mirror player flow)
-                                    try {
-                                        const newCalc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
-                                        const newBreak = newCalc.breakdown || {};
-                                        const newMax = newCalc.max || 0;
-                                        const addBack = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0) || 0;
-                                        const newPoor = Math.min(newMax, (newBreak.poor || 0) + addBack);
-                                        await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', newPoor, newMax, Math.max(0, newMax - newPoor));
-                                    } catch (popReleaseErr) {
-                                        console.warn('[AI Engine] failed to release population after build', popReleaseErr.message);
-                                    }
+                                    // No manual "release" of population needed. `current_population` represents people present
+                                    // and occupation will change as buildings change. Keep population updates centralised in
+                                    // populationService/resourceGenerator flows.
                                 }
                             }
                         }
@@ -589,7 +574,9 @@ async function decideNewConstruction(client, ai, entityRow) {
     await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityRow.id]);
     const popCalc = await populationService.calculateAvailablePopulationWithClient(client, entityRow.id);
     const popRequiredDelta = reqs.popForNextLevel - reqs.currentPopRequirement;
-    if ((popCalc.available || 0) < popRequiredDelta) {
+    const HOUSE_TYPES = ['house', 'casa_de_piedra', 'casa_de_ladrillos'];
+    const isHouseType = HOUSE_TYPES.includes(bestUpgrade);
+    if ((popCalc.available || 0) < popRequiredDelta && !isHouseType) {
         console.log(`[AI Engine] ⚠️ entity ${entityRow.id} necesita más población para mejorar ${bestUpgrade}.`);
         return;
     }
@@ -626,19 +613,8 @@ async function decideNewConstruction(client, ai, entityRow) {
         currentResources[resource] = (currentResources[resource] || 0) - amount;
     }
 
-    // Reserve population for the scheduled construction (decrement poor bucket)
-    try {
-        const popNeeded = popRequiredDelta || 0;
-        if (popNeeded > 0) {
-            const poorCur = Number(popCalc.breakdown && popCalc.breakdown.poor ? popCalc.breakdown.poor : 0);
-            const maxPop = Number(popCalc.max || 0);
-            const newPoorCur = Math.max(0, poorCur - popNeeded);
-            const newAvail = Math.max(0, maxPop - newPoorCur);
-            await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'poor', newPoorCur, maxPop, newAvail);
-        }
-    } catch (popErr) {
-        console.warn('[AI Engine] failed to reserve population when scheduling construction', popErr.message);
-    }
+    // No reservation of current population here. Occupation is derived from buildings and will
+    // automatically affect available population once the building is persisted.
 
     // Create construction schedule and persist to entities.ai_runtime
     const finishTime = new Date(new Date().getTime() + reqs.requiredTimeS * 1000);
