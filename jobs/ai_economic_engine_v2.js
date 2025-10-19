@@ -292,7 +292,15 @@ async function buildPlanner(perception, pool, opts = {}) {
       rawValueSum += rate * base; // per level estimate
     }
     if (rawValueSum <= 0) {
-      logEvent({ type: 'build_candidate_skipped', entityId, buildingId, reason: 'no_production_value', valueSum: rawValueSum, priceBaseMap });
+      // include a concise perceiveSnapshot value for debugging
+      const perceptionSnapshotForLog = {
+        inventory: perception && perception.inventory ? perception.inventory : {},
+        priceBaseMap: perception && perception.priceBaseMap ? perception.priceBaseMap : {},
+        x: perception && typeof perception.x !== 'undefined' ? perception.x : null,
+        y: perception && typeof perception.y !== 'undefined' ? perception.y : null,
+        neighborsCount: perception && perception.neighbors ? perception.neighbors.length : 0
+      };
+      logEvent({ type: 'build_candidate_skipped', entityId, buildingId, reason: 'no_production_value', valueSum: rawValueSum, priceBaseMap, perception: perceptionSnapshotForLog });
       continue; // skip non-producer buildings for now
     }
 

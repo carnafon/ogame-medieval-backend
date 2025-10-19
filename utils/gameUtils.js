@@ -15,8 +15,8 @@ const COORD_RADIUS = 25; // Radio de la zona de influencia de la facción (ej: 2
 // Cada entrada describe la producción neta por tick para recursos según claves en la DB (ej: wood, stone, food, water, clay, leather, coal, copper, wool, honey)
 const PRODUCTION_RATES = {
     'house': { },
-    'sawmill': { wood: 5, food: -1 },
-    'quarry': { stone: 8, food: -2 },
+    'sawmill': { wood: 5, food: 0 },
+    'quarry': { stone: 8, food: 0 },
     'farm': { food: 10, wood: -1 },
     // Nuevos edificios para recursos comunes
     'well': { water: 5 },
@@ -24,7 +24,7 @@ const PRODUCTION_RATES = {
     'tannery': { leather: 3 },
     'coal_mine': { coal: 3 },
     'copper_mine': { copper: 3 },
-    'sheepfold': { wool: 2, food: -1 },
+    'sheepfold': { wool: 2, food: 0 },
     'apiary': { honey: 1 }
 };
 
