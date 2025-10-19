@@ -51,6 +51,26 @@ function findProducerForResource(resourceName) {
     return FALLBACK[key] || null;
 }
 
+// Map a building type to which population bucket it consumes: 'poor'|'burgess'|'patrician'
+function mapBuildingToPopulationBucket(buildingType) {
+    if (!buildingType) return 'poor';
+    const key = buildingType.toString().toLowerCase();
+    const prodRates = gameUtils.PRODUCTION_RATES || {};
+    const resourceCategories = gameUtils.RESOURCE_CATEGORIES || {};
+    const rates = prodRates[key] || {};
+    for (const res of Object.keys(rates)) {
+        const cat = resourceCategories[res];
+        if (!cat) continue;
+        if (cat === 'common') return 'poor';
+        if (cat === 'processed') return 'burgess';
+        if (cat === 'specialized') return 'patrician';
+    }
+    // fallback heuristics by name
+    if (key.includes('farm') || key.includes('well') || key.includes('sawmill') || key.includes('quarry')) return 'poor';
+    if (key.includes('carpinter') || key.includes('fabrica') || key.includes('alfareria') || key.includes('tintoreria')) return 'burgess';
+    return 'poor';
+}
+
 /**
  * Procesa la lógica económica (construcción, producción, comercio) para todas las ciudades IA.
  * @param {object} pool - Instancia de la conexión a PostgreSQL (pg.Pool).
@@ -174,10 +194,27 @@ async function runEconomicUpdate(pool) {
                             const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
                             // Respect population semantics: `max_population` = capacity, `current_population` = people present,
                             // `available` = current_population - occupation. Do NOT mutate current_population to "reserve" workers.
-                            // Allow house-type buildings (that increase capacity) to be built even when no available workers.
+                            // If not enough available, AI should not build. If the bucket is at full capacity (current == max)
+                            // then attempt to build a house that increases that bucket's max_population.
                             const HOUSE_TYPES = ['house', 'casa_de_piedra', 'casa_de_ladrillos'];
                             const isHouseType = HOUSE_TYPES.includes(bestUpgrade);
-                            if (availablePop >= popNeeded || isHouseType) {
+                            // Identify which population bucket this building would consume
+                            const targetBucket = mapBuildingToPopulationBucket(bestUpgrade);
+                            const currentForBucket = (calc.breakdown && Number.isFinite(Number(calc.breakdown[targetBucket])) ? Number(calc.breakdown[targetBucket]) : 0);
+                            const maxForBucket = (calc.max && Number.isFinite(Number(calc.max)) ? Number(calc.max) : 0);
+                            // Note: calc.max is sum of all max buckets; we need per-type max by re-querying populations when needed
+                            let perTypeMax = null;
+                            try {
+                                const prow = await client.query('SELECT max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, targetBucket]);
+                                if (prow.rows.length > 0) perTypeMax = Number(prow.rows[0].max_population || 0);
+                            } catch (e) {
+                                perTypeMax = null;
+                            }
+
+                            const enoughAvailable = (availablePop >= popNeeded);
+                            const atCapacity = (perTypeMax !== null && currentForBucket >= perTypeMax);
+
+                            if (enoughAvailable || isHouseType) {
                                 console.log(`[AI Engine] entity=${entityId} has available pop ${availablePop} and needs ${popNeeded} for ${bestUpgrade}`);
                                 // lock and read resource_inventory
                                 const rows = await client.query(
@@ -313,6 +350,33 @@ async function runEconomicUpdate(pool) {
                                         // and occupation will change as buildings change. Keep population updates centralised in
                                         // populationService/resourceGenerator flows.
                                 }
+                            } else {
+                                // Not enough available population to build this (and it's not a house)
+                                if (atCapacity) {
+                                    // try to build the appropriate house to expand capacity for targetBucket
+                                    const bucketHouse = targetBucket === 'poor' ? 'house' : (targetBucket === 'burgess' ? 'casa_de_piedra' : 'casa_de_ladrillos');
+                                    console.log(`[AI Engine] entity=${entityId} at capacity on ${targetBucket}, attempting to build ${bucketHouse} to increase capacity.`);
+                                    // compute requirements for the bucket-specific house
+                                    const houseLevel = runtimeBuildings[bucketHouse] || 0;
+                                    const houseReqs = calculateUpgradeRequirementsFromConstants(bucketHouse, houseLevel);
+                                    if (houseReqs) {
+                                        // quick resource check (currentResources from above)
+                                        let enoughForHouse = true;
+                                        for (const r in houseReqs.requiredCost) {
+                                            if ((currentResources[r] || 0) < houseReqs.requiredCost[r]) { enoughForHouse = false; break; }
+                                        }
+                                        if (enoughForHouse) {
+                                            // override build target to the house
+                                            bestUpgrade = bucketHouse;
+                                            reqs.requiredCost = houseReqs.requiredCost;
+                                            reqs.nextLevel = houseReqs.nextLevel;
+                                            reqs.popForNextLevel = houseReqs.popForNextLevel;
+                                            reqs.currentPopRequirement = houseReqs.currentPopRequirement;
+                                            hasEnough = true; // allow proceed to build house now
+                                        }
+                                    }
+                                }
+                            }
                             }
                         }
                     }
@@ -653,9 +717,58 @@ async function decideNewConstruction(client, ai, entityRow) {
     const popRequiredDelta = reqs.popForNextLevel - reqs.currentPopRequirement;
     const HOUSE_TYPES = ['house', 'casa_de_piedra', 'casa_de_ladrillos'];
     const isHouseType = HOUSE_TYPES.includes(bestUpgrade);
-    if ((popCalc.available || 0) < popRequiredDelta && !isHouseType) {
-        console.log(`[AI Engine] ⚠️ entity ${entityRow.id} necesita más población para mejorar ${bestUpgrade}.`);
-        return;
+
+    const availablePop = popCalc.available || 0;
+    const targetBucket = mapBuildingToPopulationBucket(bestUpgrade);
+    const currentForBucket = (popCalc.breakdown && Number.isFinite(Number(popCalc.breakdown[targetBucket])) ? Number(popCalc.breakdown[targetBucket]) : 0);
+    let perTypeMax = null;
+    try {
+        const prow = await client.query('SELECT max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityRow.id, targetBucket]);
+        if (prow.rows.length > 0) perTypeMax = Number(prow.rows[0].max_population || 0);
+    } catch (e) { perTypeMax = null; }
+
+    const enoughAvailable = (availablePop >= popRequiredDelta);
+    const atCapacity = (perTypeMax !== null && currentForBucket >= perTypeMax);
+    if (!enoughAvailable && !isHouseType) {
+        if (atCapacity) {
+            // Try building a house to expand capacity
+            const bucketHouse = targetBucket === 'poor' ? 'house' : (targetBucket === 'burgess' ? 'casa_de_piedra' : 'casa_de_ladrillos');
+            console.log(`[AI Engine] entity=${entityRow.id} at capacity on ${targetBucket}, will try to schedule ${bucketHouse} instead of ${bestUpgrade}`);
+            const houseLevel = (runtime.buildings && runtime.buildings[bucketHouse]) || 0;
+            const houseReqs = calculateUpgradeRequirementsFromConstants(bucketHouse, houseLevel);
+            if (houseReqs) {
+                // quick resource check
+                const rows = await client.query(
+                    `SELECT rt.name, ri.amount
+                     FROM resource_inventory ri
+                     JOIN resource_types rt ON ri.resource_type_id = rt.id
+                     WHERE ri.entity_id = $1
+                     FOR UPDATE`,
+                    [entityRow.id]
+                );
+                const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+                let enoughForHouse = true;
+                for (const r in houseReqs.requiredCost) {
+                    if ((currentResources[r] || 0) < houseReqs.requiredCost[r]) { enoughForHouse = false; break; }
+                }
+                if (enoughForHouse) {
+                    // switch the plan to build the house
+                    bestUpgrade = bucketHouse;
+                    reqs.requiredCost = houseReqs.requiredCost;
+                    reqs.nextLevel = houseReqs.nextLevel;
+                    reqs.popForNextLevel = houseReqs.popForNextLevel;
+                    reqs.currentPopRequirement = houseReqs.currentPopRequirement;
+                } else {
+                    console.log(`[AI Engine] entity=${entityRow.id} lacks resources to build ${bucketHouse} to expand capacity.`);
+                    return;
+                }
+            } else {
+                return;
+            }
+        } else {
+            console.log(`[AI Engine] ⚠️ entity ${entityRow.id} necesita más población para mejorar ${bestUpgrade}.`);
+            return;
+        }
     }
 
     // Check resources by locking resource_inventory rows for this entity
