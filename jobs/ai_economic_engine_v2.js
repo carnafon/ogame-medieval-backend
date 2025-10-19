@@ -264,12 +264,26 @@ async function buildPlanner(perception, pool, opts = {}) {
         'casa_de_piedra': 'house',
         'casa_de_ladrillos': 'house',
         'casa': 'house',
-        'aserradero': 'sawmill',
-        'cantera': 'quarry',
-        'granja': 'farm',
-        'pozo': 'well',
-        'mina_carbon': 'coal_mine',
-        'mina_cobre': 'copper_mine'
+        // english/spanish synonyms
+        'aserradero': 'sawmill', 'sawmill': 'sawmill',
+        'cantera': 'quarry', 'quarry': 'quarry',
+        'granja': 'farm', 'farm': 'farm',
+        'pozo': 'well', 'well': 'well',
+        'clay_pit': 'clay_pit', 'claypit': 'clay_pit',
+        'tannery': 'tannery', 'curtiduria': 'tannery',
+        'mina_carbon': 'coal_mine', 'coal_mine': 'coal_mine', 'carbon_mina': 'coal_mine',
+        'mina_cobre': 'copper_mine', 'copper_mine': 'copper_mine',
+        'sheepfold': 'sheepfold', 'ovelario': 'sheepfold',
+        'apiary': 'apiary', 'colmenar': 'apiary',
+        'sastreria': 'sastreria', 'carpinteria': 'carpinteria', 'carpintero': 'carpinteria',
+        'fabrica_ladrillos': 'fabrica_ladrillos', 'bazar_especias': 'bazar_especias',
+        'alfareria': 'alfareria', 'tintoreria_morada': 'tintoreria_morada',
+        'herreria': 'herreria', 'forja': 'forja',
+        'salazoneria': 'salazoneria', 'libreria': 'libreria', 'cerveceria': 'cerveceria',
+        'elixireria': 'elixireria', 'tintoreria_real': 'tintoreria_real', 'escriba': 'escriba',
+        'artificiero': 'artificiero', 'herreria_real': 'herreria_real', 'lineria': 'lineria',
+        'tintoreria_dorada': 'tintoreria_dorada', 'herreria_mitica': 'herreria_mitica',
+        'salinas': 'salinas', 'mina_azufre': 'mina_azufre', 'mina_gemas': 'mina_gemas', 'telar_real': 'telar_real'
       };
       if (canonicalMap[lower] && prodRatesAll[canonicalMap[lower]]) return canonicalMap[lower];
       // try stripping common suffixes/prefixes
@@ -312,7 +326,8 @@ async function buildPlanner(perception, pool, opts = {}) {
     const prodKey = resolveProdKey(buildingId);
     const rates = prodKey ? (prodRatesAll[prodKey] || {}) : {};
     if (!prodKey) {
-      logEvent({ type: 'build_prod_key_missing', entityId, buildingId, note: 'no matching production key' });
+      const availableKeys = Object.keys(prodRatesAll || {}).slice(0, 80);
+      logEvent({ type: 'build_prod_key_missing', entityId, buildingId, note: 'no matching production key', availableProductionKeys: availableKeys });
     } else if (prodKey !== buildingId) {
       logEvent({ type: 'build_prod_key_mapped', entityId, buildingId, usedKey: prodKey });
     }
