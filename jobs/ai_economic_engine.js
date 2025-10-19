@@ -198,6 +198,7 @@ async function runEconomicUpdate(pool) {
                         }
                     }
                     if (bestUpgrade) {
+                        const lowestLevel = runtimeBuildings[bestUpgrade] || 0;
                         console.log(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
                         const reqs = calculateUpgradeRequirementsFromConstants(bestUpgrade, lowestLevel);
                         console.log(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
