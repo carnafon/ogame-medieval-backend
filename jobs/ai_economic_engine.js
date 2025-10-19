@@ -183,200 +183,167 @@ async function runEconomicUpdate(pool) {
                     }
                     if (bestUpgrade) {
                         console.log(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
-                        console.log(`[AI Engine] entity=${entityId} foodProduced=${foodProduced} currentResourcesLight=`, currentResourcesLight);
                         const reqs = calculateUpgradeRequirementsFromConstants(bestUpgrade, lowestLevel);
                         console.log(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
                         if (reqs) {
-                            // check population (lock populations and read summary) using centralized helper
+                            // lock populations and compute availability
                             await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
                             const calc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
                             const availablePop = calc.available || 0;
                             const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
-                            // Respect population semantics: `max_population` = capacity, `current_population` = people present,
-                            // `available` = current_population - occupation. Do NOT mutate current_population to "reserve" workers.
-                            // If not enough available, AI should not build. If the bucket is at full capacity (current == max)
-                            // then attempt to build a house that increases that bucket's max_population.
+
                             const HOUSE_TYPES = ['house', 'casa_de_piedra', 'casa_de_ladrillos'];
                             const isHouseType = HOUSE_TYPES.includes(bestUpgrade);
-                            // Identify which population bucket this building would consume
+
                             const targetBucket = mapBuildingToPopulationBucket(bestUpgrade);
                             const currentForBucket = (calc.breakdown && Number.isFinite(Number(calc.breakdown[targetBucket])) ? Number(calc.breakdown[targetBucket]) : 0);
-                            const maxForBucket = (calc.max && Number.isFinite(Number(calc.max)) ? Number(calc.max) : 0);
-                            // Note: calc.max is sum of all max buckets; we need per-type max by re-querying populations when needed
                             let perTypeMax = null;
                             try {
                                 const prow = await client.query('SELECT max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, targetBucket]);
                                 if (prow.rows.length > 0) perTypeMax = Number(prow.rows[0].max_population || 0);
-                            } catch (e) {
-                                perTypeMax = null;
-                            }
+                            } catch (e) { perTypeMax = null; }
 
                             const enoughAvailable = (availablePop >= popNeeded);
                             const atCapacity = (perTypeMax !== null && currentForBucket >= perTypeMax);
 
-                            if (enoughAvailable || isHouseType) {
-                                console.log(`[AI Engine] entity=${entityId} has available pop ${availablePop} and needs ${popNeeded} for ${bestUpgrade}`);
-                                // lock and read resource_inventory
-                                const rows = await client.query(
-                                    `SELECT rt.name, ri.amount
-                                     FROM resource_inventory ri
-                                     JOIN resource_types rt ON ri.resource_type_id = rt.id
-                                     WHERE ri.entity_id = $1
-                                     FOR UPDATE`,
-                                    [entityId]
-                                );
-                                const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
-                                console.log(`[AI Engine] entity=${entityId} current resources:`, currentResources);
-
-                                let hasEnough = true;
-                                const missing = {};
-                                for (const resource in reqs.requiredCost) {
-                                    const needAmt = reqs.requiredCost[resource] || 0;
-                                    const haveAmt = currentResources[resource] || 0;
-                                    if (haveAmt < needAmt) { hasEnough = false; missing[resource] = { need: needAmt, have: haveAmt }; }
-                                }
-
-                                if (!hasEnough) {
-                                    console.log(`[AI Engine] entity=${entityId} lacks resources for ${bestUpgrade}:`, missing);
-                                    // Try to find a producer building for the first missing resource and prefer upgrading it
-                                    try {
-                                        const missingKeys = Object.keys(missing || {});
-                                        if (missingKeys.length > 0) {
-                                            const producer = findProducerForResource(missingKeys[0]);
-                                            if (producer && producer !== bestUpgrade && BUILDING_COSTS[producer]) {
-                                                console.log(`[AI Engine] entity=${entityId} will try to upgrade producer ${producer} for missing resource ${missingKeys[0]}`);
-                                                // set as candidate and compute its requirements
-                                                const prodCurLevel = runtimeBuildings[producer] || 0;
-                                                const prodReqs = calculateUpgradeRequirementsFromConstants(producer, prodCurLevel);
-                                                if (prodReqs) {
-                                                    // Check pop & resources quickly (using currentResources snapshot)
-                                                    const prodPopNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
-                                                    if ((calc.available || 0) >= prodPopNeeded) {
-                                                        // determine if we have enough resources to upgrade producer
-                                                        let enoughForProducer = true;
-                                                        for (const r in prodReqs.requiredCost) {
-                                                            if ((currentResources[r] || 0) < prodReqs.requiredCost[r]) { enoughForProducer = false; break; }
-                                                        }
-                                                        if (enoughForProducer) {
-                                                            console.log(`[AI Engine] entity=${entityId} switching build target to producer ${producer}`);
-                                                            // set bestUpgrade to producer and reuse its reqs in the build flow
-                                                            bestUpgrade = producer;
-                                                            lowestLevel = prodCurLevel;
-                                                            // override reqs so subsequent code will build it
-                                                            // Note: we don't re-run the loop; just let next section see hasEnough true
-                                                            for (const r in prodReqs.requiredCost) {
-                                                                // no-op: keeping structure; actual deduction will use prodReqs
-                                                            }
-                                                            // Reassign reqs variable used below by simple shadowing
-                                                            reqs.requiredCost = prodReqs.requiredCost;
-                                                            reqs.nextLevel = prodReqs.nextLevel;
-                                                            reqs.popForNextLevel = prodReqs.popForNextLevel;
-                                                            reqs.currentPopRequirement = prodReqs.currentPopRequirement;
-                                                            hasEnough = true; // force building producer
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } catch (pe) {
-                                        console.warn('[AI Engine] error while selecting producer for missing resource', pe.message);
-                                    }
-                                }
-
-                                if (hasEnough) {
-                                    console.log(`[AI Engine] entity=${entityId} has enough resources for ${bestUpgrade}`);
-                                    // No population reservation step here: occupation is derived from buildings and will
-                                    // automatically reduce `available` once the building is persisted (after commit).
-
-                                    // Deduct resources
-                                    for (const resource in reqs.requiredCost) {
-                                        const amount = reqs.requiredCost[resource] || 0;
-                                        if (amount <= 0) continue;
-                                        await client.query(
-                                            `UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name = $3)`,
-                                            [amount, entityId, resource]
-                                        );
-                                    }
-
-                                    // Persist building level increment
-                                    const blRes = await client.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, bestUpgrade]);
-                                    if (blRes.rows.length > 0) {
-                                        await client.query('UPDATE buildings SET level = level + 1 WHERE entity_id = $1 AND type = $2', [entityId, bestUpgrade]);
-                                    } else {
-                                        await client.query('INSERT INTO buildings (entity_id, type, level) VALUES ($1,$2,1)', [entityId, bestUpgrade]);
-                                    }
-
-                                    console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
-                                        // Update population buckets for house-type buildings to increase capacity
-                                        try {
-                                            const gu = require('../utils/gameUtils');
-                                            const inc = gu.POPULATION_PER_HOUSE || 5;
-                                            if (bestUpgrade === 'casa_de_piedra') {
-                                                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'burgess']);
-                                                if (prow.rows.length > 0) {
-                                                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                                                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                                                    const avail = Math.max(0, maxv - cur);
-                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
-                                                } else {
-                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', 0, inc, inc);
-                                                }
-                                            } else if (bestUpgrade === 'casa_de_ladrillos') {
-                                                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'patrician']);
-                                                if (prow.rows.length > 0) {
-                                                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                                                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                                                    const avail = Math.max(0, maxv - cur);
-                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
-                                                } else {
-                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', 0, inc, inc);
-                                                }
-                                            } else if (bestUpgrade === 'house') {
-                                                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'poor']);
-                                                if (prow.rows.length > 0) {
-                                                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                                                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                                                    const avail = Math.max(0, maxv - cur);
-                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', cur, maxv, avail);
-                                                } else {
-                                                    await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', 0, inc, inc);
-                                                }
-                                            }
-                                        } catch (e) {
-                                            console.warn('[AI Engine] Failed to update house population bucket:', e.message);
-                                        }
-
-                                        // No manual "release" of population needed. `current_population` represents people present
-                                        // and occupation will change as buildings change. Keep population updates centralised in
-                                        // populationService/resourceGenerator flows.
-                                }
-                            } else {
-                                // Not enough available population to build this (and it's not a house)
+                            // If not enough available and not a house, consider building a house if at capacity
+                            if (!enoughAvailable && !isHouseType) {
                                 if (atCapacity) {
-                                    // try to build the appropriate house to expand capacity for targetBucket
                                     const bucketHouse = targetBucket === 'poor' ? 'house' : (targetBucket === 'burgess' ? 'casa_de_piedra' : 'casa_de_ladrillos');
-                                    console.log(`[AI Engine] entity=${entityId} at capacity on ${targetBucket}, attempting to build ${bucketHouse} to increase capacity.`);
-                                    // compute requirements for the bucket-specific house
                                     const houseLevel = runtimeBuildings[bucketHouse] || 0;
                                     const houseReqs = calculateUpgradeRequirementsFromConstants(bucketHouse, houseLevel);
                                     if (houseReqs) {
-                                        // quick resource check (currentResources from above)
+                                        // quick resource check
+                                        const rr = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 FOR UPDATE`, [entityId]);
+                                        const currentResources = Object.fromEntries(rr.rows.map(r => [r.name, parseInt(r.amount, 10)]));
                                         let enoughForHouse = true;
                                         for (const r in houseReqs.requiredCost) {
                                             if ((currentResources[r] || 0) < houseReqs.requiredCost[r]) { enoughForHouse = false; break; }
                                         }
                                         if (enoughForHouse) {
-                                            // override build target to the house
                                             bestUpgrade = bucketHouse;
                                             reqs.requiredCost = houseReqs.requiredCost;
                                             reqs.nextLevel = houseReqs.nextLevel;
                                             reqs.popForNextLevel = houseReqs.popForNextLevel;
                                             reqs.currentPopRequirement = houseReqs.currentPopRequirement;
-                                            hasEnough = true; // allow proceed to build house now
+                                        } else {
+                                            // cannot build house due to lack of resources, skip building
+                                            console.log(`[AI Engine] entity=${entityId} lacks resources to build ${bucketHouse} to expand capacity.`);
+                                            // exit build attempt
+                                            // nothing to do here, AI will try other actions later
+                                            // we just skip to next phase
+                                            // (no explicit return to keep transactional context intact)
                                         }
                                     }
+                                } else {
+                                    // not enough available and not at capacity -> cannot build
+                                    // skip build
                                 }
                             }
+
+                            // After possible house fallback, attempt resource check and build if resources suffice
+                            // lock and read resource_inventory
+                            const rows = await client.query(`SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 FOR UPDATE`, [entityId]);
+                            const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+
+                            let hasEnough = true;
+                            const missing = {};
+                            for (const resource in reqs.requiredCost) {
+                                const needAmt = reqs.requiredCost[resource] || 0;
+                                const haveAmt = currentResources[resource] || 0;
+                                if (haveAmt < needAmt) { hasEnough = false; missing[resource] = { need: needAmt, have: haveAmt }; }
+                            }
+
+                            if (!hasEnough) {
+                                // Try producer fallback
+                                try {
+                                    const missingKeys = Object.keys(missing || {});
+                                    if (missingKeys.length > 0) {
+                                        const producer = findProducerForResource(missingKeys[0]);
+                                        if (producer && producer !== bestUpgrade && BUILDING_COSTS[producer]) {
+                                            const prodCurLevel = runtimeBuildings[producer] || 0;
+                                            const prodReqs = calculateUpgradeRequirementsFromConstants(producer, prodCurLevel);
+                                            if (prodReqs) {
+                                                const prodPopNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
+                                                if ((calc.available || 0) >= prodPopNeeded) {
+                                                    let enoughForProducer = true;
+                                                    for (const r in prodReqs.requiredCost) {
+                                                        if ((currentResources[r] || 0) < prodReqs.requiredCost[r]) { enoughForProducer = false; break; }
+                                                    }
+                                                    if (enoughForProducer) {
+                                                        bestUpgrade = producer;
+                                                        lowestLevel = prodCurLevel;
+                                                        reqs.requiredCost = prodReqs.requiredCost;
+                                                        reqs.nextLevel = prodReqs.nextLevel;
+                                                        reqs.popForNextLevel = prodReqs.popForNextLevel;
+                                                        reqs.currentPopRequirement = prodReqs.currentPopRequirement;
+                                                        hasEnough = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (pe) {
+                                    console.warn('[AI Engine] error while selecting producer for missing resource', pe.message);
+                                }
+                            }
+
+                            if (hasEnough) {
+                                // Deduct resources
+                                for (const resource in reqs.requiredCost) {
+                                    const amount = reqs.requiredCost[resource] || 0;
+                                    if (amount <= 0) continue;
+                                    await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name = $3)`, [amount, entityId, resource]);
+                                }
+
+                                // Persist building level increment
+                                const blRes = await client.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, bestUpgrade]);
+                                if (blRes.rows.length > 0) {
+                                    await client.query('UPDATE buildings SET level = level + 1 WHERE entity_id = $1 AND type = $2', [entityId, bestUpgrade]);
+                                } else {
+                                    await client.query('INSERT INTO buildings (entity_id, type, level) VALUES ($1,$2,1)', [entityId, bestUpgrade]);
+                                }
+
+                                console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
+
+                                // If house built, update population bucket max accordingly
+                                try {
+                                    const gu = require('../utils/gameUtils');
+                                    const inc = gu.POPULATION_PER_HOUSE || 5;
+                                    if (bestUpgrade === 'casa_de_piedra') {
+                                        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'burgess']);
+                                        if (prow.rows.length > 0) {
+                                            const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                                            const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                            const avail = Math.max(0, maxv - cur);
+                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
+                                        } else {
+                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', 0, inc, inc);
+                                        }
+                                    } else if (bestUpgrade === 'casa_de_ladrillos') {
+                                        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'patrician']);
+                                        if (prow.rows.length > 0) {
+                                            const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                                            const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                            const avail = Math.max(0, maxv - cur);
+                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
+                                        } else {
+                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', 0, inc, inc);
+                                        }
+                                    } else if (bestUpgrade === 'house') {
+                                        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'poor']);
+                                        if (prow.rows.length > 0) {
+                                            const cur = parseInt(prow.rows[0].current_population || 0, 10);
+                                            const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                            const avail = Math.max(0, maxv - cur);
+                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', cur, maxv, avail);
+                                        } else {
+                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', 0, inc, inc);
+                                        }
+                                    }
+                                } catch (e) {
+                                    console.warn('[AI Engine] Failed to update house population bucket:', e.message);
+                                }
                             }
                         }
                     }
