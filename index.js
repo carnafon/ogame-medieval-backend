@@ -82,7 +82,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
                     p.then(r => { clearTimeout(t); resolve(r); }).catch(err => { clearTimeout(t); reject(err); });
                 });
 
-                let usedV2 = false;
+                let usedV2 = true;
                 if (preferred === '2' || (preferred === 'auto' && v2Percent > 0 && Math.random() * 100 < v2Percent)) {
                     try {
                         console.log('[WEB-CRON] Running AI engine v2 (canary)');
