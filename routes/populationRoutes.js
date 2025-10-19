@@ -39,8 +39,9 @@ router.post('/', authenticateToken, async (req, res) => {
       } else {
         // Use centralized helper to compute available within the same client/transaction
         const calc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
-        // derive available for this type based on overall available (we keep same rule: available = current_total - occupation)
-        avail = Math.max(0, cur - calc.occupation);
+  // derive available for this type using per-type occupation from calc.occupation
+  const occ = (calc && calc.occupation && Number.isFinite(Number(calc.occupation[type])) ? Number(calc.occupation[type]) : 0);
+  avail = Math.max(0, cur - occ);
         await populationService.setPopulationForTypeWithClient(client, entityId, type, cur, max, avail);
       }
     }
