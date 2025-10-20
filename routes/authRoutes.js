@@ -140,13 +140,9 @@ router.post('/login', async (req, res) => {
         if (!user || !(await bcrypt.compare(password, user.password)))
             return res.status(401).json({ message: 'Usuario o contraseña incorrectos.' });
 
-        // Obtener entidad del jugador
-        const entityResult = await pool.query(
-            'SELECT * FROM entities WHERE user_id=$1 AND type=$2',
-            [user.id, 'player']
-        );
-
-        const entity = entityResult.rows[0];
+    // Obtener entidad del jugador
+    const { getEntityByUserId } = require('../utils/entityService');
+    const entity = await getEntityByUserId(pool, user.id);
 
     // Obtener recursos (servicio centralizado)
     const resources = await getResources(entity.id);
@@ -184,21 +180,9 @@ router.get('/me', authenticateToken, async (req, res) => {
         const userId = req.user.id;
 
  // 1️⃣ Buscar la entidad asociada al usuario
-    const entityResult = await pool.query(
-      `SELECT e.id, e.type, e.x_coord, e.y_coord, e.faction_id,
-              f.name AS faction_name
-       FROM entities e
-       LEFT JOIN factions f ON f.id = e.faction_id
-       WHERE e.user_id = $1
-       LIMIT 1`,
-      [userId]
-    );
-
-    if (entityResult.rows.length === 0) {
-      return res.status(404).json({ message: 'No se encontró ninguna entidad asociada a este usuario.' });
-    }
-
-    const entity = entityResult.rows[0];
+    const { getEntityByUserId } = require('../utils/entityService');
+    const entity = await getEntityByUserId(pool, userId);
+    if (!entity) return res.status(404).json({ message: 'No se encontró ninguna entidad asociada a este usuario.' });
 
     // 2️⃣ Obtener inventario de recursos (servicio centralizado)
     const resources = await getResources(entity.id);

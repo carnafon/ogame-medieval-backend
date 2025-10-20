@@ -13,6 +13,7 @@ const pool = require('../db');
 const { calculateProductionForDuration, TICK_SECONDS } = require('../utils/gameUtils');
 const resourcesService = require('../utils/resourcesService');
 const populationService = require('../utils/populationService');
+const entityService = require('../utils/entityService');
 
 // Helper: compute upgrade requirements using BUILDING_COSTS same as the game routes
 function calculateUpgradeRequirementsFromConstants(buildingType, currentLevel) {
@@ -346,14 +347,10 @@ async function runEconomicUpdate(pool) {
 
                 // --- TRADING PHASE: attempt light-weight trades with nearby AI cities to balance resources
                 try {
-                    // find nearby AI city entities (excluding self)
-                    // findNearbyAICities: return ALL other cityIA entities on the map (search entire map)
+                    // find nearby AI city entities (excluding self) via entityService
                     async function findNearbyAICities(client, _x, _y, radius = 0, limit = 0) {
-                        // Return all cityIA entities except self. Limit is optional.
-                        const q = limit && limit > 0 ? `SELECT e.id, e.x_coord, e.y_coord FROM entities e WHERE e.type = 'cityIA' AND e.id <> $1 LIMIT $2` : `SELECT e.id, e.x_coord, e.y_coord FROM entities e WHERE e.type = 'cityIA' AND e.id <> $1`;
-                        const params = limit && limit > 0 ? [entityId, limit] : [entityId];
-                        const res = await client.query(q, params);
-                        return res.rows || [];
+                        const rows = await entityService.listNearbyAICities(client, entityId, limit || 8);
+                        return rows || [];
                     }
 
                     const marketService = require('../utils/marketService');
@@ -377,11 +374,10 @@ async function runEconomicUpdate(pool) {
                     // Load price_base for all resource types (reuse mapping already loaded at top for heuristics)
                     const priceBaseMap = priceBaseMapTop;
 
-                    // Load this entity coords and resources
-                    const entRowRes = await client.query('SELECT x_coord, y_coord FROM entities WHERE id = $1', [entityId]);
-                    const entRow = entRowRes.rows[0] || {};
-                    const x = entRow.x_coord || 0;
-                    const y = entRow.y_coord || 0;
+                    // Load this entity coords and resources via entityService
+                    const coords = await entityService.getEntityCoords(client, entityId);
+                    const x = coords.x_coord || 0;
+                    const y = coords.y_coord || 0;
 
                     const nearby = await findNearbyAICities(client, x, y, RADIUS, 8);
                     console.log(`[AI Engine] entity=${entityId} found ${nearby.length} potential trade partners`);
@@ -514,17 +510,17 @@ async function runEconomicUpdateForCity(pool, cityId) {
     try {
         await client.query('BEGIN');
 
-        const entityRowRes = await client.query('SELECT * FROM entities WHERE id = $1 FOR UPDATE', [entityId]);
-        if (entityRowRes.rows.length === 0) { await client.query('COMMIT'); return true; }
-        const entityRow = entityRowRes.rows[0];
-        const runtime = entityRow.ai_runtime || {};
+    const entityService = require('../utils/entityService');
+    const entityRow = await entityService.getEntityById(client, entityId, true);
+    if (!entityRow) { await client.query('COMMIT'); return true; }
+    const runtime = entityRow.ai_runtime || {};
 
         if (runtime.current_construction && new Date(runtime.current_construction.finish_time) <= now) {
             await completeConstruction(client, { id: cityId }, entityRow);
         } else {
             // re-read runtime from entities and decide
-            const fresh = await client.query('SELECT ai_runtime as runtime FROM entities WHERE id = $1', [entityRow.id]);
-            const currentRuntime = (fresh.rows[0] && fresh.rows[0].runtime) || runtime;
+            const freshRow = await entityService.getEntityById(client, entityRow.id, false);
+            const currentRuntime = (freshRow && freshRow.ai_runtime) || runtime;
             if (!currentRuntime.current_construction) {
                 await decideNewConstruction(client, { id: cityId }, entityRow);
             }

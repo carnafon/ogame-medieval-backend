@@ -169,13 +169,10 @@ const findAvailableCoordinates = async (pool, factionId) => {
 
         attempts++;
 
-        // Consultar si algún otro usuario ya tiene estas coordenadas
-        const checkRes = await pool.query(
-            'SELECT id FROM entities WHERE x_coord = $1 AND y_coord = $2',
-            [x, y]
-        );
-
-        isOccupied = checkRes.rows.length > 0;
+        // Consultar si algún otro usuario ya tiene estas coordenadas via entityService
+        const entityService = require('./entityService');
+        const checkRes = await entityService.findEntityByCoords(pool, x, y);
+        isOccupied = !!checkRes;
     } 
 
     return { x, y };

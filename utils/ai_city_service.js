@@ -118,7 +118,13 @@ async function deleteCityById(clientOrPool, id) {
     // Find linked entity via ai_cities.entity_id
     const aiRow = await client.query('SELECT entity_id FROM ai_cities WHERE id = $1', [id]);
     if (aiRow.rows.length > 0 && aiRow.rows[0].entity_id) {
-        await client.query('DELETE FROM entities WHERE id = $1', [aiRow.rows[0].entity_id]);
+        const entityService = require('./entityService');
+        try {
+            await entityService.deleteEntity(client, aiRow.rows[0].entity_id);
+        } catch (e) {
+            // fallback to direct delete if service fails
+            await client.query('DELETE FROM entities WHERE id = $1', [aiRow.rows[0].entity_id]);
+        }
     }
     await client.query('DELETE FROM ai_cities WHERE id = $1', [id]);
     return city;

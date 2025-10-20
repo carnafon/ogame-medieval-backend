@@ -46,16 +46,19 @@ router.post('/build', async (req, res) => {
         };
 
                 // Check population availability for non-house buildings
-                // Lock the entity row to avoid races when modifying population
-                const entRow = await client.query('SELECT faction_id FROM entities WHERE id = $1 FOR UPDATE', [entity.id]);
-                if (entRow.rows.length === 0) {
+                // Lock the entity row to avoid races when modifying population via entityService
+                const entityService = require('../utils/entityService');
+                try {
+                    await entityService.lockEntity(client, entity.id);
+                } catch (e) {
                     await client.query('ROLLBACK');
                     return res.status(404).json({ message: 'Entidad no encontrada.' });
                 }
                 // Determine faction name (if any) for permission checks
                 let factionName = null;
                 try {
-                    const fid = entRow.rows[0].faction_id;
+                    const er = await entityService.getEntityById(client, entity.id, false);
+                    const fid = er && er.faction_id;
                     if (fid) {
                         const fnr = await client.query('SELECT name FROM factions WHERE id = $1 LIMIT 1', [fid]);
                         if (fnr.rows.length > 0) factionName = fnr.rows[0].name;
@@ -182,9 +185,9 @@ router.post('/build', async (req, res) => {
             console.warn('Failed to update special house population buckets:', e.message);
         }
 
-        // 6️⃣ Obtener entidad actualizada (población, recursos)
-        const updatedEntityRes = await client.query('SELECT id, faction_id, x_coord, y_coord FROM entities WHERE id = $1', [entity.id]);
-        const updatedEntity = updatedEntityRes.rows[0];
+    // 6️⃣ Obtener entidad actualizada (población, recursos) via entityService
+    const entityService = require('../utils/entityService');
+    const updatedEntity = await entityService.getEntityById(client, entity.id, false);
 
         // Obtener recursos actualizados via resourcesService
         const updatedResources = await require('../utils/resourcesService').getResourcesWithClient(client, entity.id);
@@ -252,9 +255,10 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     try {
         // Find user's entity id
-        const er = await pool.query('SELECT id FROM entities WHERE user_id = $1 LIMIT 1', [userId]);
-        if (er.rows.length === 0) return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
-        const entityId = er.rows[0].id;
+    const entityService = require('../utils/entityService');
+    const ent = await entityService.getEntityByUserId(pool, userId);
+    if (!ent) return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
+    const entityId = ent.id;
 
         // Call the central processor for a single entity
         const rg = require('../jobs/resourceGenerator');
@@ -286,9 +290,9 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
         // Determine entity id: prefer query, fallback to user's entity
         let targetEntityId = entityId;
         if (!targetEntityId) {
-            const er = await pool.query('SELECT id FROM entities WHERE user_id = $1 LIMIT 1', [userId]);
-            if (er.rows.length === 0) return res.status(404).json({ message: 'No se encontró entidad para el usuario.' });
-            targetEntityId = er.rows[0].id;
+                const ent = await require('../utils/entityService').getEntityByUserId(pool, userId);
+                if (!ent) return res.status(404).json({ message: 'No se encontró entidad para el usuario.' });
+                targetEntityId = ent.id;
         }
 
     const costBase = BUILDING_COSTS[buildingType];
@@ -329,8 +333,15 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
         // Determine faction and whether this building is allowed
         let factionName = null;
         try {
-            const fr = await pool.query('SELECT f.name FROM entities e JOIN factions f ON e.faction_id = f.id WHERE e.id = $1 LIMIT 1', [targetEntityId]);
-            if (fr.rows.length > 0) factionName = fr.rows[0].name;
+            try {
+                const er = await require('../utils/entityService').getEntityById(pool, targetEntityId, false);
+                if (er && er.faction_id) {
+                    const fnr = await pool.query('SELECT name FROM factions WHERE id = $1 LIMIT 1', [er.faction_id]);
+                    if (fnr.rows.length > 0) factionName = fnr.rows[0].name;
+                }
+            } catch (e) {
+                console.warn('Failed to load faction for cost check:', e.message);
+            }
         } catch (fErr) {
             console.warn('Failed to load faction for cost check:', fErr.message);
         }
@@ -352,38 +363,8 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
 
 router.get('/map', authenticateToken, async (req, res) => {
     try {
-    const result = await pool.query(`
-        SELECT 
-    e.id,
-    -- show a display name: prefer ai_cities.name for AI cities, otherwise the user's username
-    CASE WHEN e.type = 'cityIA' AND ac.name IS NOT NULL THEN ac.name ELSE u.username END AS name,
-    e.type,
-    e.x_coord,
-    e.y_coord,
-    e.user_id,
-    e.faction_id,
-    -- population: aggregate current and max across population types
-    SUM(COALESCE(p.current_population,0)) AS current_population,
-    SUM(COALESCE(p.max_population,0)) AS max_population,
-    f.name AS faction_name, 
-    -- Recursos en columnas separadas
-    SUM(CASE WHEN rt.name = 'wood' THEN ri.amount ELSE 0 END) AS wood,
-    SUM(CASE WHEN rt.name = 'stone' THEN ri.amount ELSE 0 END) AS stone,
-    SUM(CASE WHEN rt.name = 'food' THEN ri.amount ELSE 0 END) AS food,
-    -- Opcional: edificios en formato json
-    json_agg(json_build_object('type', b.type, 'count', 1)) AS buildings
-FROM entities e
-LEFT JOIN users u ON u.id = e.user_id
-LEFT JOIN ai_cities ac ON ac.entity_id = e.id
-LEFT JOIN factions f ON e.faction_id = f.id
-LEFT JOIN populations p ON e.id = p.entity_id
-JOIN resource_inventory ri ON e.id = ri.entity_id
-JOIN resource_types rt ON ri.resource_type_id = rt.id
-LEFT JOIN buildings b ON e.id = b.entity_id
-WHERE rt.name IN ('wood','stone','food')
-GROUP BY e.id, ac.name, u.username, f.name;
-    `);
-        res.status(200).json(result.rows);
+        const rows = await require('../utils/entityService').listEntitiesForMap(pool);
+        res.status(200).json(rows);
     } catch (err) {
         console.error('Error al obtener mapa:', err.message);
         res.status(500).json({ message: 'Error al obtener mapa.' });

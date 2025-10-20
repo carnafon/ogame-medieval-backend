@@ -30,8 +30,9 @@ router.post('/', authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // lock entity row to coordinate with other entity-level ops
-    await client.query(`SELECT id FROM entities WHERE id = $1 FOR UPDATE`, [entityId]);
+    // lock entity row to coordinate with other entity-level ops via entityService
+    const entityService = require('../utils/entityService');
+    await entityService.lockEntity(client, entityId);
     const updated = await resourcesService.setResourcesWithClientGeneric(client, entityId, resources);
     await client.query('COMMIT');
     res.json({ message: 'Recursos actualizados.', entityId: Number(entityId), resources: updated });

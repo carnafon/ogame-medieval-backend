@@ -55,11 +55,11 @@ function logEvent(event) {
 // Perception: snapshot of entity inventory, coords, and price_base map
 async function perceiveSnapshot(pool, entityId, opts = {}) {
   const client = pool;
-  // load coords
-  const entRowRes = await client.query('SELECT x_coord, y_coord FROM entities WHERE id = $1', [entityId]);
-  const entRow = entRowRes.rows[0] || {};
-  const x = entRow.x_coord || 0;
-  const y = entRow.y_coord || 0;
+  // load coords via entityService
+  const entityService = require('../utils/entityService');
+  const coords = await entityService.getEntityCoords(client, entityId);
+  const x = coords.x_coord || 0;
+  const y = coords.y_coord || 0;
 
   // load inventory via resourcesService
   const inventory = await resourcesService.getResourcesWithClient(client, entityId);
@@ -69,12 +69,9 @@ async function perceiveSnapshot(pool, entityId, opts = {}) {
   const priceBaseMap = {};
   for (const r of ptRes.rows) priceBaseMap[r.name] = Number(r.price_base) || 1;
 
-  // find nearby AI city entities (limited)
-  const nbRes = await client.query(
-    `SELECT e.id, e.x_coord, e.y_coord FROM entities e WHERE e.type = 'cityIA' AND e.id <> $1 LIMIT $2`,
-    [entityId, opts.maxNeighbors || DEFAULTS.MAX_NEIGHBORS]
-  );
-  const neighbors = (nbRes.rows || []).map(r => ({ id: r.id, x: r.x_coord, y: r.y_coord }));
+  // find nearby AI city entities (limited) via entityService
+  const nbRows = await entityService.listNearbyAICities(client, entityId, opts.maxNeighbors || DEFAULTS.MAX_NEIGHBORS);
+  const neighbors = (nbRows || []).map(r => ({ id: r.id, x: r.x_coord, y: r.y_coord }));
   
   return { entityId, x, y, inventory, priceBaseMap, neighbors };
 }
