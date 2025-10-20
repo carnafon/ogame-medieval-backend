@@ -294,12 +294,13 @@ async function buildPlanner(perception, pool, opts = {}) {
   // compute population stats for consumption
   let populationStats = { current_population: 0 };
   try {
-    const prow = await pool.query('SELECT type, current_population, max_population FROM populations WHERE entity_id = $1', [entityId]);
-    if (prow.rows && prow.rows.length > 0) {
-      let total = 0;
-      prow.rows.forEach(r => { total += Number(r.current_population || 0); });
-      populationStats.current_population = total;
+    const populationService = require('../utils/populationService');
+    const popRows = await populationService.getPopulationRowsWithClient(pool, entityId);
+    let total = 0;
+    for (const k of Object.keys(popRows || {})) {
+      total += Number(popRows[k].current || 0);
     }
+    populationStats.current_population = total;
   } catch (e) {
     // leave defaults if query fails
   }
@@ -390,11 +391,10 @@ async function buildPlanner(perception, pool, opts = {}) {
     let perTypeMax = null;
     let perTypeCurrent = null;
     try {
-      const prow = await pool.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, bucket]);
-      if (prow.rows.length > 0) {
-        perTypeCurrent = Number(prow.rows[0].current_population || 0);
-        perTypeMax = Number(prow.rows[0].max_population || 0);
-      }
+      const populationService = require('../utils/populationService');
+      const row = await populationService.getPopulationByTypeWithClient(pool, entityId, bucket);
+      perTypeCurrent = Number(row.current || 0);
+      perTypeMax = Number(row.max || 0);
     } catch (e) {
       perTypeMax = null;
     }
@@ -461,10 +461,11 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
     // population check: ensure per-type current < max unless building is a house
     const bucket = mapBuildingToPopulationBucket(buildingId);
     if (!(buildingId === 'house' || buildingId.startsWith('casa') || buildingId.startsWith('house'))) {
-      const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1 FOR UPDATE', [entityId, bucket]);
-      if (prow.rows.length > 0) {
-        const cur = Number(prow.rows[0].current_population || 0);
-        const maxv = Number(prow.rows[0].max_population || 0);
+      // Use populationService to lock/obtain the per-type row and check capacity
+      const popRow = await populationService.getPopulationByTypeWithClient(client, entityId, bucket);
+      if (popRow) {
+        const cur = Number(popRow.current || 0);
+        const maxv = Number(popRow.max || 0);
         if (cur >= maxv) {
           logEvent({ type: 'build_failed_population_capacity', entityId, buildingId, bucket, current: cur, max: maxv });
           await client.query('ROLLBACK');
@@ -494,35 +495,23 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       const gu = require('../utils/gameUtils');
       const inc = gu.POPULATION_PER_HOUSE || 5;
       if (buildingId === 'casa_de_piedra') {
-        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'burgess']);
-        if (prow.rows.length > 0) {
-          const cur = parseInt(prow.rows[0].current_population || 0, 10);
-          const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-          const avail = Math.max(0, maxv - cur);
-          await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
-        } else {
-          await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', 0, inc, inc);
-        }
+        const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'burgess');
+        const cur = Number(prow.current || 0);
+        const maxv = Number(prow.max || 0) + inc;
+        const avail = Math.max(0, maxv - cur);
+        await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
       } else if (buildingId === 'casa_de_ladrillos') {
-        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'patrician']);
-        if (prow.rows.length > 0) {
-          const cur = parseInt(prow.rows[0].current_population || 0, 10);
-          const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-          const avail = Math.max(0, maxv - cur);
-          await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
-        } else {
-          await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', 0, inc, inc);
-        }
+        const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'patrician');
+        const cur = Number(prow.current || 0);
+        const maxv = Number(prow.max || 0) + inc;
+        const avail = Math.max(0, maxv - cur);
+        await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
       } else if (buildingId === 'house') {
-        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'poor']);
-        if (prow.rows.length > 0) {
-          const cur = parseInt(prow.rows[0].current_population || 0, 10);
-          const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-          const avail = Math.max(0, maxv - cur);
-          await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', cur, maxv, avail);
-        } else {
-          await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', 0, inc, inc);
-        }
+        const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'poor');
+        const cur = Number(prow.current || 0);
+        const maxv = Number(prow.max || 0) + inc;
+        const avail = Math.max(0, maxv - cur);
+        await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', cur, maxv, avail);
       }
     } catch (e) {
       console.warn('[AI v2] Failed to update population bucket after building:', e && e.message);

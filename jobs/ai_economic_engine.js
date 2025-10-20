@@ -203,9 +203,9 @@ async function runEconomicUpdate(pool) {
                         const reqs = calculateUpgradeRequirementsFromConstants(bestUpgrade, lowestLevel);
                         console.log(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
                         if (reqs) {
-                            // lock populations and compute availability
-                            await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
-                            const calc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
+                        // lock populations and compute availability using populationService
+                        await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
+                        const calc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
                             const availablePop = calc.available || 0;
                             const popNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
 
@@ -216,8 +216,8 @@ async function runEconomicUpdate(pool) {
                             const currentForBucket = (calc.breakdown && Number.isFinite(Number(calc.breakdown[targetBucket])) ? Number(calc.breakdown[targetBucket]) : 0);
                             let perTypeMax = null;
                             try {
-                                const prow = await client.query('SELECT max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, targetBucket]);
-                                if (prow.rows.length > 0) perTypeMax = Number(prow.rows[0].max_population || 0);
+                                const prow = await populationService.getPopulationByTypeWithClient(client, entityId, targetBucket);
+                                perTypeMax = Number(prow.max || 0);
                             } catch (e) { perTypeMax = null; }
 
                             const enoughAvailable = (availablePop >= popNeeded);
@@ -324,43 +324,31 @@ async function runEconomicUpdate(pool) {
                                 console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
 
                                 // If house built, update population bucket max accordingly
-                                try {
-                                    const gu = require('../utils/gameUtils');
-                                    const inc = gu.POPULATION_PER_HOUSE || 5;
-                                    if (bestUpgrade === 'casa_de_piedra') {
-                                        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'burgess']);
-                                        if (prow.rows.length > 0) {
-                                            const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                                            const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                    try {
+                                        const gu = require('../utils/gameUtils');
+                                        const inc = gu.POPULATION_PER_HOUSE || 5;
+                                        if (bestUpgrade === 'casa_de_piedra') {
+                                            const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'burgess');
+                                            const cur = Number(prow.current || 0);
+                                            const maxv = Number(prow.max || 0) + inc;
                                             const avail = Math.max(0, maxv - cur);
                                             await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
-                                        } else {
-                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', 0, inc, inc);
-                                        }
-                                    } else if (bestUpgrade === 'casa_de_ladrillos') {
-                                        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'patrician']);
-                                        if (prow.rows.length > 0) {
-                                            const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                                            const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                        } else if (bestUpgrade === 'casa_de_ladrillos') {
+                                            const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'patrician');
+                                            const cur = Number(prow.current || 0);
+                                            const maxv = Number(prow.max || 0) + inc;
                                             const avail = Math.max(0, maxv - cur);
                                             await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
-                                        } else {
-                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', 0, inc, inc);
-                                        }
-                                    } else if (bestUpgrade === 'house') {
-                                        const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, 'poor']);
-                                        if (prow.rows.length > 0) {
-                                            const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                                            const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
+                                        } else if (bestUpgrade === 'house') {
+                                            const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'poor');
+                                            const cur = Number(prow.current || 0);
+                                            const maxv = Number(prow.max || 0) + inc;
                                             const avail = Math.max(0, maxv - cur);
                                             await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', cur, maxv, avail);
-                                        } else {
-                                            await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', 0, inc, inc);
                                         }
+                                    } catch (e) {
+                                        console.warn('[AI Engine] Failed to update house population bucket:', e.message);
                                     }
-                                } catch (e) {
-                                    console.warn('[AI Engine] Failed to update house population bucket:', e.message);
-                                }
                             }
                         }
                     }

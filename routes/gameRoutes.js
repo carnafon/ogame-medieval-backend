@@ -178,32 +178,21 @@ router.post('/build', async (req, res) => {
         // If new building is one of the special houses, increase the appropriate population max bucket
         try {
             if (buildingType === 'casa_de_piedra') {
-                // Increases burgess.max_population by POPULATION_PER_HOUSE (use same constant as gameUtils)
                 const gu = require('../utils/gameUtils');
                 const inc = gu.POPULATION_PER_HOUSE || 5;
-                // read current burgess row
-                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entity.id, 'burgess']);
-                if (prow.rows.length > 0) {
-                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                    const avail = Math.max(0, maxv - cur);
-                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'burgess', cur, maxv, avail);
-                } else {
-                    // create row
-                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'burgess', 0, inc, inc);
-                }
+                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'burgess');
+                const cur = Number(prow.current || 0);
+                const maxv = Number(prow.max || 0) + inc;
+                const avail = Math.max(0, maxv - cur);
+                await populationService.setPopulationForTypeWithClient(client, entity.id, 'burgess', cur, maxv, avail);
             } else if (buildingType === 'casa_de_ladrillos') {
                 const gu = require('../utils/gameUtils');
                 const inc = gu.POPULATION_PER_HOUSE || 5;
-                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entity.id, 'patrician']);
-                if (prow.rows.length > 0) {
-                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                    const avail = Math.max(0, maxv - cur);
-                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'patrician', cur, maxv, avail);
-                } else {
-                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'patrician', 0, inc, inc);
-                }
+                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'patrician');
+                const cur = Number(prow.current || 0);
+                const maxv = Number(prow.max || 0) + inc;
+                const avail = Math.max(0, maxv - cur);
+                await populationService.setPopulationForTypeWithClient(client, entity.id, 'patrician', cur, maxv, avail);
             }
         } catch (e) {
             console.warn('Failed to update special house population buckets:', e.message);
@@ -234,19 +223,15 @@ router.post('/build', async (req, res) => {
             await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.min(newMax, (newBreak.poor || 0) + 1), newMax, Math.max(0, newMax - (Math.min(newMax, (newBreak.poor || 0) + 1))));
         }
         // If the built building is a house, increase poor.max_population
-        if (buildingType === 'house') {
+                if (buildingType === 'house') {
             try {
                 const gu = require('../utils/gameUtils');
                 const inc = gu.POPULATION_PER_HOUSE || 5;
-                const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entity.id, 'poor']);
-                if (prow.rows.length > 0) {
-                    const cur = parseInt(prow.rows[0].current_population || 0, 10);
-                    const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                    const avail = Math.max(0, maxv - cur);
-                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', cur, maxv, avail);
-                } else {
-                    await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', 0, inc, inc);
-                }
+                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'poor');
+                const cur = Number(prow.current || 0);
+                const maxv = Number(prow.max || 0) + inc;
+                const avail = Math.max(0, maxv - cur);
+                await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', cur, maxv, avail);
             } catch (e) {
                 console.warn('Failed to update house population bucket (poor):', e.message);
             }

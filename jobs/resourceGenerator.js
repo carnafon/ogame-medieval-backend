@@ -102,15 +102,9 @@ async function processEntity(entityId, options) {
                 else if (cat === 'specialized' || cat === 'special') SPECIAL_RES.push(name);
             });
 
-            // Load per-type population rows so we have current and max per type
-            const popRows = await client.query('SELECT type, current_population, max_population FROM populations WHERE entity_id = $1', [entityId]);
-            const popMap = {};
-            popRows.rows.forEach(r => {
-                popMap[(r.type || '').toLowerCase()] = {
-                    current: Number(r.current_population) || 0,
-                    max: Number(r.max_population) || 0
-                };
-            });
+            // Load per-type population rows via populationService so logic is centralized
+            const populationService = require('../utils/populationService');
+            const popMap = await populationService.getPopulationRowsWithClient(client, entityId);
 
             const tryConsumeForType = (typeKey, resourceKeys) => {
                 const cur = popMap[typeKey]?.current || 0;

@@ -91,6 +91,87 @@ async function getPopulationSummaryWithClient(client, entityId) {
   return { total, max, available, breakdown };
 }
 
+// Return per-type rows (current/max/available) as a map keyed by type. Client-aware.
+async function getPopulationRowsWithClient(client, entityId) {
+  const res = await client.query('SELECT type, current_population, max_population, available_population FROM populations WHERE entity_id = $1', [entityId]);
+  const map = {};
+  for (const r of res.rows) {
+    const t = (r.type || '').toLowerCase();
+    map[t] = {
+      current: parseInt(r.current_population || 0, 10),
+      max: parseInt(r.max_population || 0, 10),
+      available: parseInt(r.available_population || 0, 10)
+    };
+  }
+  return map;
+}
+
+// Get a single population type row via client
+async function getPopulationByTypeWithClient(client, entityId, type) {
+  const t = (type || '').toString();
+  const res = await client.query('SELECT type, current_population, max_population, available_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, t]);
+  if (!res.rows || res.rows.length === 0) return { current: 0, max: 0, available: 0 };
+  const r = res.rows[0];
+  return { current: parseInt(r.current_population || 0, 10), max: parseInt(r.max_population || 0, 10), available: parseInt(r.available_population || 0, 10) };
+}
+
+// Non-client wrapper for setting population for a type
+async function setPopulationForType(entityId, type, currentPopulation, maxPopulation, availablePopulation) {
+  const client = await pool.connect();
+  try {
+    await setPopulationForTypeWithClient(client, entityId, type, currentPopulation, maxPopulation, availablePopulation);
+    return true;
+  } finally {
+    client.release();
+  }
+}
+
+// Atomically adjust population counters for a type using provided client.
+// deltaCurrent/deltaMax/deltaAvailable can be positive or negative. Returns the new row { current, max, available }.
+async function adjustPopulationForTypeWithClient(client, entityId, type, deltaCurrent = 0, deltaMax = 0, deltaAvailable = 0) {
+  // lock the row
+  const t = (type || '').toString();
+  await client.query('SELECT id, current_population, max_population, available_population FROM populations WHERE entity_id = $1 AND type = $2 FOR UPDATE', [entityId, t]);
+  const res = await client.query('SELECT current_population, max_population, available_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, t]);
+  let cur = 0; let maxv = 0; let avail = 0;
+  if (res.rows && res.rows.length > 0) {
+    cur = parseInt(res.rows[0].current_population || 0, 10);
+    maxv = parseInt(res.rows[0].max_population || 0, 10);
+    avail = parseInt(res.rows[0].available_population || 0, 10);
+  }
+  cur = Math.max(0, cur + Number(deltaCurrent || 0));
+  maxv = Math.max(0, maxv + Number(deltaMax || 0));
+  avail = Math.max(0, avail + Number(deltaAvailable || 0));
+
+  // ensure available does not exceed current or max
+  avail = Math.min(avail, Math.max(0, cur));
+
+  await client.query(
+    `INSERT INTO populations (entity_id, type, current_population, max_population, available_population)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (entity_id, type) DO UPDATE SET current_population = EXCLUDED.current_population, max_population = EXCLUDED.max_population, available_population = EXCLUDED.available_population`,
+    [entityId, t, cur, maxv, avail]
+  );
+
+  return { current: cur, max: maxv, available: avail };
+}
+
+// Non-client wrapper for adjust
+async function adjustPopulationForType(entityId, type, deltaCurrent = 0, deltaMax = 0, deltaAvailable = 0) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await adjustPopulationForTypeWithClient(client, entityId, type, deltaCurrent, deltaMax, deltaAvailable);
+    await client.query('COMMIT');
+    return out;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (er) {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // Set population for a specific type using provided client
 async function setPopulationForTypeWithClient(client, entityId, type, currentPopulation, maxPopulation, availablePopulation) {
   await client.query(
