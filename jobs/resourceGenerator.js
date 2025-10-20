@@ -42,7 +42,13 @@ async function processEntity(entityId, options) {
             faction_name = '';
         }
     }
-    const last = entity.last_resource_update ? new Date(entity.last_resource_update) : new Date();
+    // If last_resource_update is missing, treat it as one tick ago so the
+    // generator will process at least one tick on first run instead of
+    // returning early because secondsElapsed would be 0.
+    console.log("Entity last_resource_update:", entity.last_resource_update);
+    const last = entity.last_resource_update
+        ? new Date(entity.last_resource_update)
+        : new Date(Date.now() - (TICK_SECONDS * 1000));
     const now = new Date();
     const secondsElapsed = Math.max(0, Math.floor((now - last) / 1000));
     if (secondsElapsed <= 0) {
