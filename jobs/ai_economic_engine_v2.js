@@ -459,13 +459,19 @@ async function buildPlanner(perception, pool, opts = {}) {
     return a.payback - b.payback;
   });
 
+  const rejectedDueToPopCount = (candidates || []).length - (filteredCandidates || []).length;
+  // detect if there was a house-type candidate in the original candidate list (useful to attempt building capacity)
+  const houseCandidate = (candidates || []).find(c => {
+    return (c.buildingId === 'house' || c.buildingId.startsWith('casa') || c.buildingId.startsWith('house'));
+  }) || null;
+
   if (!filteredCandidates || filteredCandidates.length === 0) {
-    logEvent({ type: 'build_planner_no_candidates', entityId, reason: 'no_viable_candidates', priceBaseMap });
+    logEvent({ type: 'build_planner_no_candidates', entityId, reason: 'no_viable_candidates', priceBaseMap, rejectedDueToPopCount });
   } else {
-    logEvent({ type: 'build_planner_candidates', entityId, count: filteredCandidates.length, top: filteredCandidates[0] });
+    logEvent({ type: 'build_planner_candidates', entityId, count: filteredCandidates.length, top: filteredCandidates[0], rejectedDueToPopCount });
   }
 
-  return filteredCandidates;
+  return { candidates: filteredCandidates, rejectedDueToPopCount, houseCandidate };
 }
 
 // Execute build action atomically: deduct resources, persist building level, and update populations for houses
@@ -599,16 +605,28 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
   // Plan trades
   const tradeActions = tradePlanner(perception, { maxTradesPerTick: opts.maxTradesPerTick, baseBuyDiv: opts.baseBuyDiv, baseSellDiv: opts.baseSellDiv });
   // Plan builds
-  let buildCandidates = [];
+  let buildPlannerResult = { candidates: [] };
   try {
-    buildCandidates = await buildPlanner(perception, pool, {});
+    buildPlannerResult = await buildPlanner(perception, pool, {});
   } catch (e) {
     console.warn('[AI v2] buildPlanner failed for', cityId, e && e.message);
-    buildCandidates = [];
+    buildPlannerResult = { candidates: [] };
   }
 
+  // buildPlannerResult: { candidates: [...], rejectedDueToPopCount: N, houseCandidate }
+  const buildCandidates = buildPlannerResult && buildPlannerResult.candidates ? buildPlannerResult.candidates : [];
+
   // Decision: choose the top candidate between best build (low payback) and best trade (high score)
-  const bestBuild = (buildCandidates && buildCandidates.length > 0) ? buildCandidates[0] : null;
+  // prefer base producers when available
+  const BASE_PREF = ['sawmill', 'quarry', 'farm'];
+  let bestBuild = null;
+  if (buildCandidates && buildCandidates.length > 0) {
+    // try to find a base pref candidate among top few
+    const topSlice = buildCandidates.slice(0, 10);
+    const basePick = topSlice.find(c => BASE_PREF.includes(c.buildingId));
+    if (basePick) bestBuild = basePick;
+    else bestBuild = buildCandidates[0];
+  }
   const bestTrade = (tradeActions && tradeActions.length > 0) ? tradeActions[0] : null;
 
   const execResults = [];
@@ -648,7 +666,7 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
       // ignore and proceed with bestBuild
     }
 
-    const bres = await executeBuildAction(pool, chosenBuild, perception, {});
+  const bres = await executeBuildAction(pool, chosenBuild, perception, {});
     execResults.push({ action: { type: 'build', building: bestBuild.buildingId }, result: bres });
     if (bres && bres.success) return { success: true, cityId, acted: true, results: execResults };
     // if build failed, try to prioritize building a producer of the missing resource (if that was the reason)
@@ -664,6 +682,20 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
         if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
       }
     }
+  }
+
+  // If no builds were executed and there were candidates rejected due to population shortage, attempt to build a house to increase capacity
+  try {
+    const rejectedN = (buildPlannerResult && buildPlannerResult.rejectedDueToPopCount) || 0;
+    const houseCand = (buildPlannerResult && buildPlannerResult.houseCandidate) || null;
+    if ((!bestBuild || !bestBuild.hasCapacity || (bestBuild && bestBuild.payback > PAYBACK_THRESHOLD)) && rejectedN > 0 && houseCand) {
+      logEvent({ type: 'build_attempt_house_for_capacity', entityId: cityId, reason: 'no_pop_slots', rejected: rejectedN, house: houseCand.buildingId });
+      const hres = await executeBuildAction(pool, houseCand, perception, {});
+      execResults.push({ action: { type: 'build', building: houseCand.buildingId }, result: hres });
+      if (hres && hres.success) return { success: true, cityId, acted: true, results: execResults };
+    }
+  } catch (e) {
+    // ignore failures here
   }
 
   // Execute trades (fallback or if no good build)
