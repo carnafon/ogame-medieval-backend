@@ -79,7 +79,19 @@ async function perceiveSnapshot(pool, entityId, opts = {}) {
 
   return { entityId, x, y, inventory, priceBaseMap, neighbors };
 }
-
+    // if build failed due to insufficient resources, try to prioritize building that produces the missing resource
+    if (bres && bres.success === false && bres.reason === 'insufficient_resources' && bres.resource) {
+      const missing = bres.resource;
+      logEvent({ type: 'build_missing_resource', entityId: cityId, missing });
+      // find a candidate that produces the missing resource and has capacity
+      const alt = (buildCandidates || []).find(c => c.produces && c.produces.includes(missing) && c.hasCapacity);
+      if (alt) {
+        logEvent({ type: 'build_try_alternative', entityId: cityId, original: bestBuild.buildingId, alternative: alt.buildingId, missing });
+        const ares = await executeBuildAction(pool, alt, perception, {});
+        execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
+        if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
+      }
+    }
 // Trade planner: produce a list of trade actions { type: 'buy'|'sell', resource, qty, counterpartyId }
 function tradePlanner(perception, opts = {}) {
   const { inventory, priceBaseMap, neighbors } = perception;
@@ -384,7 +396,7 @@ async function buildPlanner(perception, pool, opts = {}) {
       adjustedValueSum = rawValueSum;
     }
 
-    const payback = costGold / Math.max(1, adjustedValueSum);
+  const payback = costGold / Math.max(1, adjustedValueSum);
 
     // determine target population bucket and simple population check (current < max)
     const bucket = mapBuildingToPopulationBucket(buildingId);
@@ -401,8 +413,19 @@ async function buildPlanner(perception, pool, opts = {}) {
     }
 
     const hasCapacity = (perTypeMax === null) || (perTypeCurrent < perTypeMax) || buildingId.startsWith('house') || buildingId === 'house';
+    // which resources does this building produce (positive rate)
+    const produces = Object.keys(rates || {}).filter(k => (Number(rates[k]) || 0) > 0);
+    // primary produced resource (highest weighted by price)
+    let primaryProduce = null;
+    try {
+      primaryProduce = produces.slice().sort((a,b)=>{
+        const va = (Number(rates[a])||0) * (priceBaseMap[a]||1);
+        const vb = (Number(rates[b])||0) * (priceBaseMap[b]||1);
+        return vb - va;
+      })[0] || null;
+    } catch(e) { primaryProduce = produces[0] || null; }
 
-    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity });
+    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, produces, primaryProduce });
   }
 
   // prefer candidates with hasCapacity true and lower payback
