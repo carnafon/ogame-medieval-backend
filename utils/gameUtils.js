@@ -15,7 +15,7 @@ const COORD_RADIUS = 25; // Radio de la zona de influencia de la facción (ej: 2
 // Cada entrada describe la producción neta por tick para recursos según claves en la DB (ej: wood, stone, food, water, clay, leather, coal, copper, wool, honey)
 const PRODUCTION_RATES = {
     'house': { },
-    'sawmill': { wood: 5, food: 0 },
+    'sawmill': { wood: 50, food: 0 },
     'quarry': { stone: 8, food: 0 },
     'farm': { food: 10, wood: 0 },
     // Nuevos edificios para recursos comunes
@@ -29,7 +29,8 @@ const PRODUCTION_RATES = {
 };
 
 // Procesados adicionales: cada edificio produce 1 unidad por tick (10s) de su producto
-PRODUCTION_RATES['carpinteria'] = { lumber: 1 }; // produces processed wood
+// Carpinteria produces processed wood (lumber) and also yields some raw wood per tick
+PRODUCTION_RATES['carpinteria'] = { lumber: 1, wood: 20};
 PRODUCTION_RATES['fabrica_ladrillos'] = { baked_brick: 1 };
 PRODUCTION_RATES['bazar_especias'] = { spice: 1 };
 PRODUCTION_RATES['alfareria'] = { refined_clay: 1 };
