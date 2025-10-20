@@ -72,9 +72,10 @@ router.post('/register', async (req, res) => {
 
         // 3️⃣ Crear entidad del jugador y inicializar recursos usando helper
         const { createEntityWithResources } = require('../utils/entityService');
-        const resourceTypes = await pool.query('SELECT id, name FROM resource_types');
+        const resourcesService = require('../utils/resourcesService');
+        const resourceTypes = await resourcesService.getResourceTypes();
         const defaults = {};
-        for (const r of resourceTypes.rows) {
+        for (const r of resourceTypes) {
           const name = (r.name || '').toLowerCase();
           defaults[name] = (new Set(['wood','stone','water','food']).has(name)) ? 100 : 0;
         }

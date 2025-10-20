@@ -99,9 +99,7 @@ async function runEconomicUpdate(pool) {
                 await client.query('BEGIN');
 
                 // Load resource price_base map once for heuristics (used by build and trade phases)
-                const ptAllTop = await client.query('SELECT lower(name) as name, price_base FROM resource_types');
-                const priceBaseMapTop = {};
-                for (const r of ptAllTop.rows) priceBaseMapTop[r.name] = Number(r.price_base) || 1;
+                const priceBaseMapTop = await resourcesService.getPriceBaseMapWithClient(client);
 
                 // Compute production based on buildings and persist produced amounts to resource_inventory
                 try {
@@ -374,7 +372,7 @@ async function runEconomicUpdate(pool) {
                     // Load price_base for all resource types (reuse mapping already loaded at top for heuristics)
                     const priceBaseMap = priceBaseMapTop;
 
-                    // Load this entity coords and resources via entityService
+                    // Load this entity coords via entityService and inventory via resourcesService
                     const coords = await entityService.getEntityCoords(client, entityId);
                     const x = coords.x_coord || 0;
                     const y = coords.y_coord || 0;
@@ -382,8 +380,7 @@ async function runEconomicUpdate(pool) {
                     const nearby = await findNearbyAICities(client, x, y, RADIUS, 8);
                     console.log(`[AI Engine] entity=${entityId} found ${nearby.length} potential trade partners`);
                     if ((nearby || []).length > 0) {
-                        const meRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`, [entityId]);
-                        const myResources = Object.fromEntries(meRes.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+                        const myResources = await resourcesService.getResourcesWithClient(client, entityId);
 
                         let tradesDone = 0;
 
@@ -664,15 +661,10 @@ async function decideNewConstruction(client, ai, entityRow) {
             const houseReqs = calculateUpgradeRequirementsFromConstants(bucketHouse, houseLevel);
             if (houseReqs) {
                 // quick resource check
-                const rows = await client.query(
-                    `SELECT rt.name, ri.amount
-                     FROM resource_inventory ri
-                     JOIN resource_types rt ON ri.resource_type_id = rt.id
-                     WHERE ri.entity_id = $1
-                     FOR UPDATE`,
-                    [entityRow.id]
-                );
-                const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+                // Lock and read resource rows using resourcesService helpers
+                await resourcesService.lockResourceRowsWithClient(client, entityRow.id);
+                const rtMap = await resourcesService.getResourcesWithClient(client, entityRow.id);
+                const currentResources = Object.fromEntries(Object.entries(rtMap).map(([k, v]) => [k.toLowerCase(), parseInt(v || 0, 10)]));
                 let enoughForHouse = true;
                 for (const r in houseReqs.requiredCost) {
                     if ((currentResources[r] || 0) < houseReqs.requiredCost[r]) { enoughForHouse = false; break; }
@@ -698,15 +690,10 @@ async function decideNewConstruction(client, ai, entityRow) {
     }
 
     // Check resources by locking resource_inventory rows for this entity
-    const rows = await client.query(
-        `SELECT rt.name, ri.amount
-         FROM resource_inventory ri
-         JOIN resource_types rt ON ri.resource_type_id = rt.id
-         WHERE ri.entity_id = $1
-         FOR UPDATE`,
-        [entityRow.id]
-    );
-    const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+    // Lock and read resource rows via resourcesService
+    await resourcesService.lockResourceRowsWithClient(client, entityRow.id);
+    const rtMap = await resourcesService.getResourcesWithClient(client, entityRow.id);
+    const currentResources = Object.fromEntries(Object.entries(rtMap).map(([k, v]) => [k.toLowerCase(), parseInt(v || 0, 10)]));
 
     let hasEnough = true;
     for (const resource in reqs.requiredCost) {
@@ -718,15 +705,19 @@ async function decideNewConstruction(client, ai, entityRow) {
         return;
     }
 
-    // Deduct resources
-    for (const resource in reqs.requiredCost) {
-        const amount = reqs.requiredCost[resource] || 0;
-        if (amount <= 0) continue;
-        await client.query(
-            `UPDATE resource_inventory ri SET amount = amount - $1 WHERE ri.entity_id = $2 AND ri.resource_type_id = (SELECT id FROM resource_types WHERE name = $3)`,
-            [amount, entityRow.id, resource]
-        );
-        currentResources[resource] = (currentResources[resource] || 0) - amount;
+    // Deduct resources using centralized resourcesService helper
+    try {
+        const costs = {};
+        for (const resource in reqs.requiredCost) {
+            const amount = reqs.requiredCost[resource] || 0;
+            if (amount <= 0) continue;
+            costs[resource.toString().toLowerCase()] = amount;
+            currentResources[resource] = (currentResources[resource] || 0) - amount;
+        }
+        await resourcesService.consumeResourcesWithClientGeneric(client, entityRow.id, costs);
+    } catch (e) {
+        console.warn('[AI Engine] Failed to deduct resources for construction via resourcesService:', e && e.message);
+        throw e;
     }
 
     // No reservation of current population here. Occupation is derived from buildings and will

@@ -30,10 +30,11 @@ async function createEntityWithResources(clientOrPool, data) {
   );
   const entity = resEnt.rows[0];
 
-  // initialize resource inventory
-  const rt = await client.query('SELECT id, name FROM resource_types');
+  // initialize resource inventory using resourcesService helper
+  const resourcesService = require('./resourcesService');
+  const rt = await resourcesService.getResourceTypesWithClient(client);
   const initial = data.initialResources || {};
-  for (const r of rt.rows) {
+  for (const r of rt) {
     const name = (r.name || '').toLowerCase();
     const amount = typeof initial[name] === 'number' ? initial[name] : 0;
     await client.query('INSERT INTO resource_inventory (entity_id, resource_type_id, amount) VALUES ($1,$2,$3)', [entity.id, r.id, amount]);
@@ -127,26 +128,45 @@ async function listEntitiesForMap(clientOrPool) {
     SUM(COALESCE(p.current_population,0)) AS current_population,
     SUM(COALESCE(p.max_population,0)) AS max_population,
     f.name AS faction_name,
-    SUM(CASE WHEN rt.name = 'wood' THEN ri.amount ELSE 0 END) AS wood,
-    SUM(CASE WHEN rt.name = 'stone' THEN ri.amount ELSE 0 END) AS stone,
-    SUM(CASE WHEN rt.name = 'food' THEN ri.amount ELSE 0 END) AS food,
     json_agg(json_build_object('type', b.type, 'count', 1)) AS buildings
     FROM entities e
     LEFT JOIN users u ON u.id = e.user_id
     LEFT JOIN ai_cities ac ON ac.entity_id = e.id
     LEFT JOIN factions f ON e.faction_id = f.id
     LEFT JOIN populations p ON e.id = p.entity_id
-    JOIN resource_inventory ri ON e.id = ri.entity_id
-    JOIN resource_types rt ON ri.resource_type_id = rt.id
     LEFT JOIN buildings b ON e.id = b.entity_id
-    WHERE rt.name IN ('wood','stone','food')
     GROUP BY e.id, ac.name, u.username, f.name`;
   if (usingClient) {
     const res = await clientOrPool.query(q);
-    return res.rows;
+    const rows = res.rows || [];
+    // Enrich each row with resource snapshot via resourcesService
+    const resourcesService = require('./resourcesService');
+    for (const r of rows) {
+      try {
+        const inv = await resourcesService.getResourcesWithClient(clientOrPool, r.id);
+        r.wood = Number(inv.wood || 0);
+        r.stone = Number(inv.stone || 0);
+        r.food = Number(inv.food || 0);
+      } catch (e) {
+        r.wood = 0; r.stone = 0; r.food = 0;
+      }
+    }
+    return rows;
   }
   const res = await pool.query(q);
-  return res.rows;
+  const rows = res.rows || [];
+  const resourcesService = require('./resourcesService');
+  for (const r of rows) {
+    try {
+      const inv = await resourcesService.getResourcesWithClient(pool, r.id);
+      r.wood = Number(inv.wood || 0);
+      r.stone = Number(inv.stone || 0);
+      r.food = Number(inv.food || 0);
+    } catch (e) {
+      r.wood = 0; r.stone = 0; r.food = 0;
+    }
+  }
+  return rows;
 }
 
 async function updateEntity(clientOrPool, id, changes) {

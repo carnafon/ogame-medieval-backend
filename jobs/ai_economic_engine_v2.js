@@ -64,10 +64,8 @@ async function perceiveSnapshot(pool, entityId, opts = {}) {
   // load inventory via resourcesService
   const inventory = await resourcesService.getResourcesWithClient(client, entityId);
 
-  // load price_base map
-  const ptRes = await client.query('SELECT lower(name) as name, price_base FROM resource_types');
-  const priceBaseMap = {};
-  for (const r of ptRes.rows) priceBaseMap[r.name] = Number(r.price_base) || 1;
+  // load price_base map via resourcesService
+  const priceBaseMap = await resourcesService.getPriceBaseMapWithClient(client);
 
   // find nearby AI city entities (limited) via entityService
   const nbRows = await entityService.listNearbyAICities(client, entityId, opts.maxNeighbors || DEFAULTS.MAX_NEIGHBORS);

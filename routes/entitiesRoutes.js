@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
-const { getResources, setResourcesWithClient } = require('../utils/resourcesService');
+const { getResources, setResourcesWithClient, getResourceTypeNameByIdWithClient } = require('../utils/resourcesService');
 const { getBuildings } = require('../utils/buildingsService');
 const populationService = require('../utils/populationService');
 const entityService = require('../utils/entityService');
@@ -176,10 +176,10 @@ router.patch('/:id/resources', authenticateToken, async (req, res) => {
       const current = await getResources(id);
       const newResources = { ...current };
       for (const { resource_type_id, amount_change } of updates) {
-        // We need to map resource_type_id -> name; query it
-        const rt = await client.query('SELECT name FROM resource_types WHERE id = $1', [resource_type_id]);
-        if (rt.rows.length === 0) throw new Error(`Tipo de recurso no encontrado: ${resource_type_id}`);
-        const name = rt.rows[0].name.toLowerCase();
+        // Map resource_type_id -> name using resourcesService helper (client-aware)
+        const rtName = await getResourceTypeNameByIdWithClient(client, resource_type_id);
+        if (!rtName) throw new Error(`Tipo de recurso no encontrado: ${resource_type_id}`);
+        const name = rtName.toLowerCase();
         newResources[name] = Math.max(0, (newResources[name] || 0) + (amount_change || 0));
       }
 

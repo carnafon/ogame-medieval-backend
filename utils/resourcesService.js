@@ -1,5 +1,90 @@
 const pool = require('../db');
 
+// ----------------------------
+// Helpers for resource_types
+// ----------------------------
+// Return array of { id, name, price_base? } (client-aware)
+async function getResourceTypesWithClient(client) {
+  const res = await client.query('SELECT id, name, price_base FROM resource_types ORDER BY id');
+  return res.rows.map(r => ({ id: r.id, name: (r.name || '').toString(), price_base: r.price_base }));
+}
+
+async function getResourceTypes() {
+  const res = await pool.query('SELECT id, name, price_base FROM resource_types ORDER BY id');
+  return res.rows.map(r => ({ id: r.id, name: (r.name || '').toString(), price_base: r.price_base }));
+}
+
+// Return map lower(name) -> id (client-aware)
+async function getResourceTypeIdMapWithClient(client) {
+  const rows = await client.query('SELECT id, lower(name) as name FROM resource_types');
+  return Object.fromEntries(rows.rows.map(r => [r.name, r.id]));
+}
+
+async function getResourceTypeIdMap() {
+  const rows = await pool.query('SELECT id, lower(name) as name FROM resource_types');
+  return Object.fromEntries(rows.rows.map(r => [r.name, r.id]));
+}
+
+// Return single resource type (id,name,price_base) by lower(name)
+async function getResourceTypeByNameWithClient(client, lowerName) {
+  const res = await client.query('SELECT id, name, price_base FROM resource_types WHERE lower(name) = $1 LIMIT 1', [lowerName]);
+  return res.rows.length ? res.rows[0] : null;
+}
+
+async function getResourceTypeByName(lowerName) {
+  const res = await pool.query('SELECT id, name, price_base FROM resource_types WHERE lower(name) = $1 LIMIT 1', [lowerName]);
+  return res.rows.length ? res.rows[0] : null;
+}
+
+// Return map lower(name) -> price_base
+async function getPriceBaseMapWithClient(client) {
+  const res = await client.query('SELECT lower(name) as name, price_base FROM resource_types');
+  const m = {};
+  for (const r of res.rows) m[r.name] = Number(r.price_base) || 1;
+  return m;
+}
+
+async function getPriceBaseMap() {
+  const res = await pool.query('SELECT lower(name) as name, price_base FROM resource_types');
+  const m = {};
+  for (const r of res.rows) m[r.name] = Number(r.price_base) || 1;
+  return m;
+}
+
+// Return total stock across all entities for a given resource lower(name)
+async function getTotalStockForResourceWithClient(client, lowerName) {
+  const res = await client.query(
+    `SELECT COALESCE(SUM(ri.amount),0)::bigint as stock
+     FROM resource_inventory ri
+     JOIN resource_types rt ON ri.resource_type_id = rt.id
+     WHERE lower(rt.name) = $1`,
+    [lowerName]
+  );
+  return Number((res.rows[0] && res.rows[0].stock) || 0);
+}
+
+async function getTotalStockForResource(lowerName) {
+  const res = await pool.query(
+    `SELECT COALESCE(SUM(ri.amount),0)::bigint as stock
+     FROM resource_inventory ri
+     JOIN resource_types rt ON ri.resource_type_id = rt.id
+     WHERE lower(rt.name) = $1`,
+    [lowerName]
+  );
+  return Number((res.rows[0] && res.rows[0].stock) || 0);
+}
+
+// Return resource type name by id
+async function getResourceTypeNameByIdWithClient(client, id) {
+  const res = await client.query('SELECT name FROM resource_types WHERE id = $1 LIMIT 1', [id]);
+  return res.rows.length ? res.rows[0].name : null;
+}
+
+async function getResourceTypeNameById(id) {
+  const res = await pool.query('SELECT name FROM resource_types WHERE id = $1 LIMIT 1', [id]);
+  return res.rows.length ? res.rows[0].name : null;
+}
+
 async function getResources(entityId) {
   const q = `SELECT rt.name, ri.amount
              FROM resource_inventory ri
@@ -343,3 +428,16 @@ module.exports.getResourcesWithClient = getResourcesWithClient;
 module.exports.lockResourceRowsWithClient = lockResourceRowsWithClient;
 // export adjust helper
 module.exports.adjustResourcesWithClientGeneric = adjustResourcesWithClientGeneric;
+// resource_types helpers
+module.exports.getResourceTypes = getResourceTypes;
+module.exports.getResourceTypesWithClient = getResourceTypesWithClient;
+module.exports.getResourceTypeIdMap = getResourceTypeIdMap;
+module.exports.getResourceTypeIdMapWithClient = getResourceTypeIdMapWithClient;
+module.exports.getResourceTypeByName = getResourceTypeByName;
+module.exports.getResourceTypeByNameWithClient = getResourceTypeByNameWithClient;
+module.exports.getPriceBaseMap = getPriceBaseMap;
+module.exports.getPriceBaseMapWithClient = getPriceBaseMapWithClient;
+module.exports.getResourceTypeNameById = getResourceTypeNameById;
+module.exports.getResourceTypeNameByIdWithClient = getResourceTypeNameByIdWithClient;
+module.exports.getTotalStockForResourceWithClient = getTotalStockForResourceWithClient;
+module.exports.getTotalStockForResource = getTotalStockForResource;

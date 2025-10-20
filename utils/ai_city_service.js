@@ -54,9 +54,10 @@ async function createPairedCity(clientOrPool, cityData) {
     // Compute initialResources: prefer explicit initialResources, otherwise default 1000 for every resource type
     let initialResources = cityData.initialResources;
     if (!initialResources || Object.keys(initialResources).length === 0) {
-        const rtRes = await client.query('SELECT name FROM resource_types');
+        const resourcesService = require('./resourcesService');
+        const rtRes = await resourcesService.getResourceTypesWithClient(client);
         initialResources = {};
-        rtRes.rows.forEach(r => { initialResources[(r.name || '').toLowerCase()] = 1000; });
+        rtRes.forEach(r => { initialResources[(r.name || '').toLowerCase()] = 1000; });
     }
 
     // 1. crear la fila de entidad usando el servicio compartido
@@ -87,8 +88,9 @@ async function createPairedCity(clientOrPool, cityData) {
     // Upsert defensivo adicional: garantizar que existe una fila en resource_inventory para cada tipo de recurso.
     // Protege contra casos donde el creador de entidades compartido no insertó filas (por ejemplo, desajuste de esquema).
     try {
-        const rt = await client.query('SELECT id, name FROM resource_types');
-        for (const r of rt.rows) {
+        const resourcesService = require('./resourcesService');
+        const rt = await resourcesService.getResourceTypesWithClient(client);
+        for (const r of rt) {
             const name = (r.name || '').toLowerCase();
             const amount = typeof initialResources[name] === 'number' ? initialResources[name] : 0;
             // Use upsert to create or set the amount

@@ -49,8 +49,9 @@ router.post('/', authenticateToken, async (req, res) => {
 // Devuelve los tipos de recursos definidos en la base de datos (incluye price_base)
 router.get('/types', async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, name, price_base FROM resource_types ORDER BY id');
-    res.json({ resourceTypes: result.rows.map(r => ({ id: r.id, name: r.name, price_base: r.price_base })) });
+  const resourcesService = require('../utils/resourcesService');
+  const types = await resourcesService.getResourceTypes();
+  res.json({ resourceTypes: types });
   } catch (err) {
     console.error('Error al obtener tipos de recursos:', err.message);
     res.status(500).json({ message: 'Error al obtener tipos de recursos.', error: err.message });
@@ -113,19 +114,14 @@ router.post('/trade', authenticateToken, async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // Resolve resource type id (case-insensitive)
-    const rtRes = await client.query('SELECT id, lower(name) as name FROM resource_types WHERE lower(name) = $1', [resource.toString().toLowerCase()]);
-    if (rtRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: `Tipo de recurso desconocido: ${resource}` });
-    }
-    const resourceTypeId = rtRes.rows[0].id;
-    const goldRtRes = await client.query('SELECT id FROM resource_types WHERE lower(name) = $1', ['gold']);
-    if (goldRtRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(500).json({ message: 'Tipo de recurso "gold" no encontrado en la base de datos.' });
-    }
-    const goldTypeId = goldRtRes.rows[0].id;
+    // Resolve resource type id and ensure 'gold' exists via resourcesService
+    const resourcesService = require('../utils/resourcesService');
+    const rt = await resourcesService.getResourceTypeByNameWithClient(client, resource.toString().toLowerCase());
+    if (!rt) { await client.query('ROLLBACK'); return res.status(400).json({ message: `Tipo de recurso desconocido: ${resource}` }); }
+    const resourceTypeId = rt.id;
+    const goldRt = await resourcesService.getResourceTypeByNameWithClient(client, 'gold');
+    if (!goldRt) { await client.query('ROLLBACK'); return res.status(500).json({ message: 'Tipo de recurso "gold" no encontrado en la base de datos.' }); }
+    const goldTypeId = goldRt.id;
 
     // Lock buyer and seller inventory rows for the two resource types (resource and gold)
     // We lock all inventory rows for both entities to simplify and avoid deadlocks ordering issues by always locking in entity id order
