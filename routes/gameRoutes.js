@@ -105,14 +105,9 @@ router.post('/build', async (req, res) => {
         try {
             // Debug: log current resources before attempting to consume
             try {
-                const currentRes = await client.query(
-                    `SELECT rt.name, ri.amount
-                     FROM resource_inventory ri
-                     JOIN resource_types rt ON ri.resource_type_id = rt.id
-                     WHERE ri.entity_id = $1`,
-                    [entity.id]
-                );
-                const curObj = Object.fromEntries(currentRes.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+                // Read current resources via resourcesService for logging
+                const resourcesService = require('../utils/resourcesService');
+                const curObj = await resourcesService.getResourcesWithClient(client, entity.id);
                 console.log(`Current resources for entity ${entity.id}:`, curObj);
             } catch (logErr) {
                 console.warn('Failed to read current resources for logging:', logErr.message);
@@ -191,17 +186,8 @@ router.post('/build', async (req, res) => {
         const updatedEntityRes = await client.query('SELECT id, faction_id, x_coord, y_coord FROM entities WHERE id = $1', [entity.id]);
         const updatedEntity = updatedEntityRes.rows[0];
 
-        // Obtener recursos actualizados
-        const updatedResourcesRes = await client.query(
-            `SELECT rt.name, ri.amount
-             FROM resource_inventory ri
-             JOIN resource_types rt ON ri.resource_type_id = rt.id
-             WHERE ri.entity_id = $1`,
-            [entity.id]
-        );
-        const updatedResources = Object.fromEntries(
-            updatedResourcesRes.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)])
-        );
+        // Obtener recursos actualizados via resourcesService
+        const updatedResources = await require('../utils/resourcesService').getResourcesWithClient(client, entity.id);
 
         // If the building consumes population, increment back (release) one unit to 'poor' bucket
         if (buildingType !== 'house') {
