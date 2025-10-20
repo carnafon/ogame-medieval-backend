@@ -483,12 +483,9 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
     }
 
     // Persist building level increment
-    const blRes = await client.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, buildingId]);
-    if (blRes.rows.length > 0) {
-      await client.query('UPDATE buildings SET level = level + 1 WHERE entity_id = $1 AND type = $2', [entityId, buildingId]);
-    } else {
-      await client.query('INSERT INTO buildings (entity_id, type, level) VALUES ($1,$2,1)', [entityId, buildingId]);
-    }
+    // Persist building level increment via buildingsService helpers
+    const { incrementBuildingLevelWithClient } = require('../utils/buildingsService');
+    await incrementBuildingLevelWithClient(client, entityId, buildingId);
 
     // If house-type built, update population max bucket
     try {

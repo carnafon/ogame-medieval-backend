@@ -150,20 +150,9 @@ router.post('/build', async (req, res) => {
             throw err;
         }
 
-        // 5️⃣ Incrementar nivel o crear edificio
-        if (currentLevel > 0) {
-            await client.query(
-                `UPDATE buildings
-                 SET level = level + 1
-                 WHERE entity_id = $1 AND type = $2`,
-                [entity.id, buildingType]
-            );
-        } else {
-            await client.query(
-                `INSERT INTO buildings (entity_id, type, level) VALUES ($1, $2, 1)`,
-                [entity.id, buildingType]
-            );
-        }
+        // 5️⃣ Incrementar nivel o crear edificio (centralizado)
+        const { incrementBuildingLevelWithClient } = require('../utils/buildingsService');
+        await incrementBuildingLevelWithClient(client, entity.id, buildingType);
 
         // 5️⃣ Obtener edificios actualizados
         const updatedBuildings = await getBuildings(entity.id);

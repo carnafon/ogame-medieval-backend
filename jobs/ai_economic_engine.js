@@ -315,11 +315,8 @@ async function runEconomicUpdate(pool) {
 
                                 // Persist building level increment
                                 const blRes = await client.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, bestUpgrade]);
-                                if (blRes.rows.length > 0) {
-                                    await client.query('UPDATE buildings SET level = level + 1 WHERE entity_id = $1 AND type = $2', [entityId, bestUpgrade]);
-                                } else {
-                                    await client.query('INSERT INTO buildings (entity_id, type, level) VALUES ($1,$2,1)', [entityId, bestUpgrade]);
-                                }
+                                const { incrementBuildingLevelWithClient } = require('../utils/buildingsService');
+                                await incrementBuildingLevelWithClient(client, entityId, bestUpgrade);
 
                                 console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
 
@@ -632,7 +629,8 @@ async function completeConstruction(client, ai, entityRow) {
     // 1. Persist building level in buildings table (use client)
     const blRes = await client.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityRow.id, building_id]);
     if (blRes.rows.length > 0) {
-        await client.query('UPDATE buildings SET level = $1 WHERE entity_id = $2 AND type = $3', [level_to_upgrade, entityRow.id, building_id]);
+    const { setBuildingLevelWithClient } = require('../utils/buildingsService');
+    await setBuildingLevelWithClient(client, entityRow.id, building_id, level_to_upgrade);
     } else {
         await client.query('INSERT INTO buildings (entity_id, type, level) VALUES ($1,$2,$3)', [entityRow.id, building_id, level_to_upgrade]);
     }
