@@ -235,7 +235,9 @@ function computeOccupationFromBuildings(buildings = []) {
   for (const b of buildings) {
     if (!b || !b.type) continue;
     const type = (b.type || '').toString();
-    if (type === 'house') continue; // houses provide capacity, don't consume population
+    const lowerType = type.toLowerCase();
+    // Treat any house variants (spanish/english) as capacity providers and do not count them as occupation
+    if (lowerType.includes('house') || lowerType.includes('casa')) continue;
     const lvl = Number.isFinite(Number(b.level)) ? Number(b.level) : 0;
     const cnt = Number.isFinite(Number(b.count)) ? Number(b.count) : 1;
     if (lvl <= 0 || cnt <= 0) continue;

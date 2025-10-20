@@ -35,6 +35,34 @@ const metrics = {
   lastRunAt: null,
 };
 
+// Simple in-memory AI memory for canary: Map<entityId, { missing: Set<string>, lastUpdated: number }>
+const aiMemory = new Map();
+
+function pushMissingResourceToMemory(entityId, resource) {
+  if (!entityId || !resource) return;
+  const key = Number(entityId);
+  const cur = aiMemory.get(key) || { missing: new Set(), lastUpdated: Date.now() };
+  cur.missing.add(resource.toString().toLowerCase());
+  cur.lastUpdated = Date.now();
+  aiMemory.set(key, cur);
+}
+
+function getMissingResourcesFromMemory(entityId) {
+  const key = Number(entityId);
+  const cur = aiMemory.get(key);
+  if (!cur || !cur.missing) return new Set();
+  return new Set(Array.from(cur.missing));
+}
+
+function clearMissingResourcesFromMemory(entityId, resourcesToClear) {
+  const key = Number(entityId);
+  const cur = aiMemory.get(key);
+  if (!cur) return;
+  if (!resourcesToClear) { aiMemory.delete(key); return; }
+  for (const r of resourcesToClear) cur.missing.delete(r.toString().toLowerCase());
+  if (cur.missing.size === 0) aiMemory.delete(key); else cur.lastUpdated = Date.now();
+}
+
 function recordMetric(key, delta = 1) {
   if (typeof metrics[key] === 'number') metrics[key] += delta;
 }
@@ -446,12 +474,14 @@ async function buildPlanner(perception, pool, opts = {}) {
       })[0] || null;
     } catch(e) { primaryProduce = produces[0] || null; }
 
-    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, hasEnoughPopSlots, produces, primaryProduce, priorityBoost });
+    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, perTypeMax, hasEnoughPopSlots, produces, primaryProduce, priorityBoost });
   }
 
   // Filter out candidates that explicitly require population slots we don't have (unless they are house types)
   const filteredCandidates = candidates.filter(c => {
     const isHouseTypeLocal = c.buildingId === 'house' || c.buildingId.startsWith('casa') || c.buildingId.startsWith('house');
+    // If perTypeMax is explicitly 0 or null for non-house types, it's likely uninitialized; filter out
+    if (!isHouseTypeLocal && (c.perTypeMax === null || c.perTypeMax === 0)) return false;
     if (isHouseTypeLocal) return true;
     if (typeof c.hasEnoughPopSlots === 'boolean' && !c.hasEnoughPopSlots) return false;
     return true;
@@ -493,12 +523,14 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
   await resourcesService.lockResourceRowsWithClient(client, entityId);
   const currentResources = await resourcesService.getResourcesWithClient(client, entityId);
 
-    for (const r in reqs.requiredCost) {
+      for (const r in reqs.requiredCost) {
       const needAmt = reqs.requiredCost[r] || 0;
       if ((currentResources[r] || 0) < needAmt) {
         // detailed missing resources log
         const have = (currentResources[r] || 0);
         logEvent({ type: 'build_failed_insufficient_resources', entityId, buildingId, resource: r, need: needAmt, have });
+        // store missing resource in AI memory so next tick we can prioritize producer buildings
+        try { pushMissingResourceToMemory(entityId, r); } catch (e) { /* ignore */ }
         await client.query('ROLLBACK');
         return { success: false, reason: 'insufficient_resources', resource: r, need: needAmt, have };
       }
@@ -513,6 +545,16 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       const maxv = Number(popRow.max || 0);
       const popNeededForThisBuild = (reqs && typeof reqs.popForNextLevel === 'number') ? Number(reqs.popForNextLevel) : 0;
       const isHouseTypeLocal = buildingId === 'house' || buildingId.startsWith('casa') || buildingId.startsWith('house');
+      // Diagnostic log to help debug population enforcement
+      logEvent({ type: 'build_population_check', entityId, buildingId, bucket, popRow: { current: cur, max: maxv, available: Number(popRow.available || 0) }, popNeeded: popNeededForThisBuild, isHouse: isHouseTypeLocal });
+
+      // If population row exists but max is zero (not initialized), treat as no capacity for non-house builds
+      if (!isHouseTypeLocal && maxv === 0) {
+        logEvent({ type: 'build_failed_population_not_initialized', entityId, buildingId, bucket, current: cur, max: maxv });
+        await client.query('ROLLBACK');
+        return { success: false, reason: 'population_not_initialized', bucket, current: cur, max: maxv };
+      }
+
       // If building consumes population (popNeededForThisBuild > 0) ensure there are enough available slots
       const available = Math.max(0, maxv - cur);
       if (!isHouseTypeLocal && popNeededForThisBuild > 0 && available < popNeededForThisBuild) {
@@ -572,6 +614,31 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
 
   await client.query('COMMIT');
   recordMetric('actionsExecuted', 1); recordMetric('successfulBuilds', 1);
+  // Clear memory for any resources this building produces (we just added capacity/production)
+  try {
+    const prodKey = (function(bid) {
+      try {
+        const pk = (function() {
+          if (!bid) return null;
+          const prodRatesAllLocal = gameUtils.PRODUCTION_RATES || {};
+          if (prodRatesAllLocal[bid]) return bid;
+          const lower = bid.toString().toLowerCase();
+          if (prodRatesAllLocal[lower]) return lower;
+          // small map similar to resolveProdKey
+          const m = { 'aserradero':'sawmill','cantera':'quarry','granja':'farm','casa_de_piedra':'house','casa_de_ladrillos':'house','casa':'house' };
+          return (m[lower] && prodRatesAllLocal[m[lower]]) ? m[lower] : null;
+        })();
+        return pk;
+      } catch (e) { return null; }
+    })(buildingId);
+    if (prodKey) {
+      const rates = (gameUtils.PRODUCTION_RATES || {})[prodKey] || {};
+      const producedResources = Object.keys(rates || {}).map(k => k.toString().toLowerCase());
+      if (producedResources.length > 0) {
+        try { clearMissingResourcesFromMemory(entityId, producedResources); } catch (e) { /* ignore */ }
+      }
+    }
+  } catch (e) { /* ignore */ }
   logEvent({ type: 'build', action: 'complete', entityId, buildingId });
   return { success: true, built: buildingId };
   } catch (e) {
@@ -628,9 +695,17 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
   if (buildCandidates && buildCandidates.length > 0) {
     // try to find a base pref candidate among top few
     const topSlice = buildCandidates.slice(0, 10);
-    const basePick = topSlice.find(c => BASE_PREF.includes(c.buildingId));
-    if (basePick) bestBuild = basePick;
-    else bestBuild = buildCandidates[0];
+    // First, prioritize candidates that produce resources the AI remembered as missing
+    const missing = Array.from(getMissingResourcesFromMemory(cityId));
+    if (missing && missing.length > 0) {
+      const prodMatch = topSlice.find(c => c.produces && c.produces.some(p => missing.includes(p)));
+      if (prodMatch) { bestBuild = prodMatch; }
+    }
+    if (!bestBuild) {
+      const basePick = topSlice.find(c => BASE_PREF.includes(c.buildingId));
+      if (basePick) bestBuild = basePick;
+      else bestBuild = buildCandidates[0];
+    }
   }
   const bestTrade = (tradeActions && tradeActions.length > 0) ? tradeActions[0] : null;
 
