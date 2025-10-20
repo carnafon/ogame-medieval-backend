@@ -161,7 +161,24 @@ app.use('/api/factions', factionRoutes);
 // Rutas de Autenticación (Login, Register, Me)
 app.use('/api', authRoutes); 
 
-// Rutas del Juego (Build, Generate-Resources)
+// Public route: expose game constants (production rates, recipes, categories, building costs)
+app.get('/api/game/constants', (req, res) => {
+    try {
+        const gu = require('./utils/gameUtils');
+        const { BUILDING_COSTS } = require('./constants/buildings');
+        return res.status(200).json({
+            productionRates: gu.PRODUCTION_RATES,
+            processingRecipes: gu.PROCESSING_RECIPES,
+            resourceCategories: gu.RESOURCE_CATEGORIES,
+            buildingCosts: BUILDING_COSTS
+        });
+    } catch (err) {
+        console.error('Failed to return game constants (public):', err && err.message ? err.message : err);
+        return res.status(500).json({ message: 'Error al obtener constantes del juego.' });
+    }
+});
+
+// Rutas del Juego (Build, Generate-Resources) — protegidas por token
 app.use('/api', authenticateToken, gameRoutes); 
 
 //rutas de entidades
