@@ -5,6 +5,7 @@ const { consumeResources } = require('../utils/resourcesService');
 const { getBuildings, getBuildingLevel } = require('../utils/buildingsService');
 const { calculatePopulationStats, calculateProduction, calculateProductionForDuration } = require('../utils/gameUtils'); // Importamos funciones de utilidad
 const { authenticateToken } = require('../middleware/auth'); // Importamos el middleware centralizado
+const entityService = require('../utils/entityService');
 
 // -----------------------------------------------------------------
 // ⭐️ CONSTANTES
@@ -47,7 +48,6 @@ router.post('/build', async (req, res) => {
 
                 // Check population availability for non-house buildings
                 // Lock the entity row to avoid races when modifying population via entityService
-                const entityService = require('../utils/entityService');
                 try {
                     await entityService.lockEntity(client, entity.id);
                 } catch (e) {
@@ -186,7 +186,6 @@ router.post('/build', async (req, res) => {
         }
 
     // 6️⃣ Obtener entidad actualizada (población, recursos) via entityService
-    const entityService = require('../utils/entityService');
     const updatedEntity = await entityService.getEntityById(client, entity.id, false);
 
         // Obtener recursos actualizados via resourcesService
@@ -255,7 +254,6 @@ router.post('/generate-resources', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     try {
         // Find user's entity id
-    const entityService = require('../utils/entityService');
     const ent = await entityService.getEntityByUserId(pool, userId);
     if (!ent) return res.status(404).json({ message: 'No se encontró entidad asociada al usuario.' });
     const entityId = ent.id;
