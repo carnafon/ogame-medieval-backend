@@ -17,7 +17,7 @@ const PRODUCTION_RATES = {
     'house': { },
     'sawmill': { wood: 5, food: 0 },
     'quarry': { stone: 8, food: 0 },
-    'farm': { food: 10, wood: -1 },
+    'farm': { food: 10, wood: 0 },
     // Nuevos edificios para recursos comunes
     'well': { water: 5 },
     'clay_pit': { clay: 4 },

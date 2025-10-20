@@ -1,5 +1,5 @@
 const pool = require('../db');
-const { calculatePopulationStats, calculateProduction, calculateProductionForDuration, TICK_SECONDS, RESOURCE_GENERATOR_WOOD_PER_TICK, RESOURCE_GENERATOR_STONE_PER_TICK } = require('../utils/gameUtils');
+const { calculatePopulationStats, calculateProduction, calculateProductionForDuration, TICK_SECONDS, RESOURCE_GENERATOR_WOOD_PER_TICK, RESOURCE_GENERATOR_STONE_PER_TICK, FOOD_CONSUMPTION_PER_CITIZEN } = require('../utils/gameUtils');
 const { getBuildings } = require('../utils/buildingsService');
 
 // Parámetros configurables
@@ -129,10 +129,23 @@ async function processEntity(entityId, options) {
                     return { newCurrent: 0, max };
                 }
 
-                // Maintenance: each existing citizen consumes 1 unit each
-                const required = cur;
+                // Maintenance: compute how many units are needed for maintenance over the elapsed seconds
+                // Consumption is applied per minute: required = ceil(cur * secondsElapsed / 60 * FOOD_CONSUMPTION_PER_CITIZEN)
+                const required = Math.max(0, Math.ceil((cur * (secondsElapsed / 60) * (FOOD_CONSUMPTION_PER_CITIZEN || 1))));
+
+                if (required <= 0) {
+                    // No maintenance required in this interval
+                    // Still allow growth if capacity and at least 1 unit of each resource remains
+                    let newCurNoMaint = cur;
+                    if ((max - cur) > 0 && haveNEach(1)) {
+                        resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                        newCurNoMaint = Math.min(max, cur + 1);
+                    }
+                    return { newCurrent: newCurNoMaint, max };
+                }
+
                 if (!haveNEach(required)) {
-                    // Not enough for full maintenance: lose one population unit
+                    // Not enough for full maintenance: lose one population unit (penalty is small per interval)
                     const newCur = Math.max(0, cur - 1);
                     return { newCurrent: newCur, max };
                 }
