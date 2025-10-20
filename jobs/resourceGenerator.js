@@ -109,26 +109,64 @@ async function processEntity(entityId, options) {
                 const cur = popMap[typeKey]?.current || 0;
                 const max = popMap[typeKey]?.max || 0;
 
-                // For population maintenance/growth we only require food for the 'poor' bucket.
-                // Other buckets (burgess/patrician) may depend on processed/special resources,
-                // but requiring every possible resource is too strict. Use sensible defaults.
-                let keysForBucket = resourceKeys;
+                // Helper: check availability of n units for each key (all keys must have >= n)
+                const haveNEach = (n) => resourceKeys.length > 0 && resourceKeys.every(k => (newResources[k] || 0) >= n);
+
+                // Poor bucket: requires consuming 1 of each common resource to initialize/grow
                 if (typeKey === 'poor') {
-                    keysForBucket = ['food'];
-                } else if (typeKey === 'burgess') {
-                    keysForBucket = resourceKeys.length > 0 ? resourceKeys : ['lumber'];
-                } else if (typeKey === 'patrician') {
-                    keysForBucket = resourceKeys.length > 0 ? resourceKeys : ['spice'];
+                    // If there is currently no poor population, allow growth by consuming 1 of each common resource
+                    if (cur <= 0) {
+                        if (max > 0 && haveNEach(1)) {
+                            resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                            return { newCurrent: 1, max };
+                        }
+                        return { newCurrent: 0, max };
+                    }
+
+                    // Maintenance: compute how many units are needed for maintenance over the elapsed seconds
+                    // Consumption is applied per minute: required = ceil(cur * secondsElapsed / 60 * FOOD_CONSUMPTION_PER_CITIZEN)
+                    const required = Math.max(0, Math.ceil((cur * (secondsElapsed / 60) * (FOOD_CONSUMPTION_PER_CITIZEN || 1))));
+
+                    if (required <= 0) {
+                        // No maintenance required in this interval
+                        // Still allow growth if capacity and at least 1 unit of each common resource remains
+                        let newCurNoMaint = cur;
+                        if ((max - cur) > 0 && haveNEach(1)) {
+                            resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                            newCurNoMaint = Math.min(max, cur + 1);
+                        }
+                        return { newCurrent: newCurNoMaint, max };
+                    }
+
+                    if (!haveNEach(required)) {
+                        // Not enough for full maintenance: lose one population unit (penalty is small per interval)
+                        const newCur = Math.max(0, cur - 1);
+                        return { newCurrent: newCur, max };
+                    }
+
+                    // Consume maintenance resources: subtract required units from each common resource
+                    resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - required); });
+
+                    // Growth: if capacity and at least 1 unit of each common resource remains, grow by 1
+                    let newCur = cur;
+                    if ((max - cur) > 0 && haveNEach(1)) {
+                        resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                        newCur = Math.min(max, cur + 1);
+                    }
+                    return { newCurrent: newCur, max };
                 }
+
+                // Burgess/Patrician: use representative resource(s) (any one) for growth/maintenance
+                let keysForBucket = resourceKeys;
+                if (typeKey === 'burgess') keysForBucket = resourceKeys.length > 0 ? resourceKeys : ['lumber'];
+                if (typeKey === 'patrician') keysForBucket = resourceKeys.length > 0 ? resourceKeys : ['spice'];
 
                 // Helper: check if we have at least n units in ANY of the provided keys
                 const haveAtLeastInAny = (n) => keysForBucket.length > 0 && keysForBucket.some(k => (newResources[k] || 0) >= n);
 
-                // If there is currently no population of this type, allow growth by consuming 1 unit
-                // of a representative resource for the bucket (food for poor, any processed for burgess, ...)
+                // If there is currently no population of this type, allow growth by consuming 1 of a representative resource
                 if (cur <= 0) {
                     if (max > 0 && haveAtLeastInAny(1)) {
-                        // Consume 1 unit from the first available key that has stock
                         for (const k of keysForBucket) {
                             if ((newResources[k] || 0) >= 1) { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); break; }
                         }
@@ -137,12 +175,10 @@ async function processEntity(entityId, options) {
                     return { newCurrent: 0, max };
                 }
 
-                // Maintenance: compute required food consumption (applies to poor bucket only)
-                const required = typeKey === 'poor' ? Math.max(0, Math.ceil((cur * (secondsElapsed / 60) * (FOOD_CONSUMPTION_PER_CITIZEN || 1)))) : 0;
+                // Maintenance: compute required food consumption for non-poor buckets as 0 (they use representative resources)
+                const required = 0;
 
                 if (required <= 0) {
-                    // No maintenance required in this interval
-                    // Still allow growth if capacity and at least 1 unit of a representative resource remains
                     let newCurNoMaint = cur;
                     if ((max - cur) > 0 && haveAtLeastInAny(1)) {
                         for (const k of keysForBucket) {
@@ -152,25 +188,7 @@ async function processEntity(entityId, options) {
                     return { newCurrent: newCurNoMaint, max };
                 }
 
-                // If not enough for full maintenance (only applies to poor), lose one population unit
-                if (typeKey === 'poor' && (newResources['food'] || 0) < required) {
-                    const newCur = Math.max(0, cur - 1);
-                    return { newCurrent: newCur, max };
-                }
-
-                // Consume maintenance resources (food only for poor)
-                if (typeKey === 'poor') {
-                    newResources['food'] = Math.max(0, (newResources['food'] || 0) - required);
-                }
-
-                // Growth: if capacity and at least 1 unit of a representative resource remains, grow by 1
-                let newCur = cur;
-                if ((max - cur) > 0 && haveAtLeastInAny(1)) {
-                    for (const k of keysForBucket) {
-                        if ((newResources[k] || 0) >= 1) { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); newCur = Math.min(max, cur + 1); break; }
-                    }
-                }
-                return { newCurrent: newCur, max };
+                return { newCurrent: cur, max };
             };
 
             const poorRes = tryConsumeForType('poor', COMMON_RES);
@@ -372,26 +390,6 @@ async function runResourceGeneratorJob() {
     // Usamos Promise.all para procesar los usuarios en paralelo y terminar más rápido.
     // Si tienes miles de usuarios, considera limitar la concurrencia (ej: a 100).
     const results = await Promise.all(ids.map(id => processEntity(id, currentOptions).catch(err => ({ error: err.message, entityId: id }))));
-
-    // Centralized logging of resource deltas produced/consumed per entity
-    try {
-        for (const r of results || []) {
-            if (!r) continue;
-            const entityIdLog = (r.entity && r.entity.id) || r.entityId || null;
-            if (entityIdLog) {
-                // Always show produced/consumed explicitly (null or object) so logs are consistent
-                console.debug(`[RESOURCE_GEN] entity=${entityIdLog} produced:`, r.resource_produced || null);
-                console.debug(`[RESOURCE_GEN] entity=${entityIdLog} consumed:`, r.resource_consumed || null);
-                // If we have produced but no consumed, also print raw deltas for debugging
-                if (r.resource_produced && !r.resource_consumed && r.resource_deltas) {
-                    console.debug(`[RESOURCE_GEN] entity=${entityIdLog} deltas (debug):`, r.resource_deltas);
-                }
-            }
-        }
-    } catch (logAllErr) {
-        console.warn('Failed to emit centralized resource delta logs:', logAllErr && logAllErr.message);
-    }
-
     console.debug("-> Generación de recursos completada.");
         return results;
     } catch (err) {
