@@ -53,15 +53,20 @@ router.post('/register', async (req, res) => {
         return res.status(400).json({ message: 'Faltan campos: username, password y factionId son obligatorios.' });
     }
 
-    try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        
+  try {
+    // Early check: if username already exists, return 409 before attempting INSERT.
+    const existsRes = await pool.query('SELECT 1 FROM users WHERE username = $1 LIMIT 1', [username]);
+    if (existsRes.rows.length > 0) {
+      return res.status(409).json({ message: 'Usuario ya existe.' });
+    }
 
-        // 1️⃣ Insertar usuario
-        const newUser = await pool.query(
-            'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
-            [username, hashedPassword]
-        );
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // 1️⃣ Insertar usuario
+    const newUser = await pool.query(
+      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
+      [username, hashedPassword]
+    );
 
         const userId = newUser.rows[0].id;
 
