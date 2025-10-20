@@ -380,6 +380,33 @@ async function buildPlanner(perception, pool, opts = {}) {
 
   const payback = costGold / Math.max(1, adjustedValueSum);
 
+    // Compute a simple priority boost if this candidate produces resources that are
+    // currently in deficit or below safety stock. This will be used by the planner
+    // to prefer urgent producers even if payback is slightly worse.
+    let priorityBoost = 0;
+    try {
+      const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
+      for (const res of Object.keys(rates)) {
+        const producesAmt = Number(rates[res]) || 0;
+        if (producesAmt <= 0) continue;
+        const netPerTick = Number(productionPerTick[res] || 0);
+        const curStock = Number(perception.inventory[res] || 0);
+        // if net production is negative -> deficit
+        if (netPerTick < 0) {
+          // larger deficits get stronger boost
+          const deficit = Math.abs(netPerTick);
+          priorityBoost += 5 * (1 + deficit / Math.max(1, Math.abs(netPerTick) + 1));
+        }
+        // if current stock below safety -> boost
+        if (curStock < SAFETY) {
+          const gap = SAFETY - curStock;
+          priorityBoost += 3 * (1 + gap / Math.max(1, SAFETY));
+        }
+      }
+    } catch (e) {
+      priorityBoost = 0;
+    }
+
     // determine target population bucket and simple population check (current < max)
     const bucket = mapBuildingToPopulationBucket(buildingId);
     let perTypeMax = null;
@@ -406,12 +433,13 @@ async function buildPlanner(perception, pool, opts = {}) {
       })[0] || null;
     } catch(e) { primaryProduce = produces[0] || null; }
 
-    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, produces, primaryProduce });
+    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, produces, primaryProduce, priorityBoost });
   }
 
   // prefer candidates with hasCapacity true and lower payback
   candidates.sort((a, b) => {
     if (a.hasCapacity !== b.hasCapacity) return a.hasCapacity ? -1 : 1;
+    if ((b.priorityBoost || 0) !== (a.priorityBoost || 0)) return (b.priorityBoost || 0) - (a.priorityBoost || 0);
     return a.payback - b.payback;
   });
 
@@ -576,7 +604,30 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
 
   if (bestBuild && bestBuild.hasCapacity && bestBuild.payback <= PAYBACK_THRESHOLD) {
     // attempt build
-    const bres = await executeBuildAction(pool, bestBuild, perception, {});
+    // If there are clear deficits or low-stock resources, try to pick a candidate
+    // that produces them even if it's not the top payback candidate.
+    let chosenBuild = bestBuild;
+    try {
+      const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
+      // find resources with projected deficit or below safety
+      const urgentResources = [];
+      for (const r of Object.keys(perception.inventory || {})) {
+        if (r === 'gold') continue;
+        const cur = Number(perception.inventory[r] || 0);
+        const netPerTick = Number((gameUtils.calculateProduction(await getBuildings(perception.entityId), { current_population: 0 })[r]) || 0);
+        if (netPerTick < 0) urgentResources.push(r);
+        else if (cur < SAFETY) urgentResources.push(r);
+      }
+      if (urgentResources.length > 0) {
+        // look for a candidate producing any urgent resource and with capacity
+        const alt = (buildCandidates || []).find(c => c.hasCapacity && c.produces && c.produces.some(p => urgentResources.includes(p)));
+        if (alt) chosenBuild = alt;
+      }
+    } catch (e) {
+      // ignore and proceed with bestBuild
+    }
+
+    const bres = await executeBuildAction(pool, chosenBuild, perception, {});
     execResults.push({ action: { type: 'build', building: bestBuild.buildingId }, result: bres });
     if (bres && bres.success) return { success: true, cityId, acted: true, results: execResults };
     // if build failed, try to prioritize building a producer of the missing resource (if that was the reason)
