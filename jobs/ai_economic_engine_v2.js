@@ -76,22 +76,9 @@ async function perceiveSnapshot(pool, entityId, opts = {}) {
     [entityId, opts.maxNeighbors || DEFAULTS.MAX_NEIGHBORS]
   );
   const neighbors = (nbRes.rows || []).map(r => ({ id: r.id, x: r.x_coord, y: r.y_coord }));
-
+  
   return { entityId, x, y, inventory, priceBaseMap, neighbors };
 }
-    // if build failed due to insufficient resources, try to prioritize building that produces the missing resource
-    if (bres && bres.success === false && bres.reason === 'insufficient_resources' && bres.resource) {
-      const missing = bres.resource;
-      logEvent({ type: 'build_missing_resource', entityId: cityId, missing });
-      // find a candidate that produces the missing resource and has capacity
-      const alt = (buildCandidates || []).find(c => c.produces && c.produces.includes(missing) && c.hasCapacity);
-      if (alt) {
-        logEvent({ type: 'build_try_alternative', entityId: cityId, original: bestBuild.buildingId, alternative: alt.buildingId, missing });
-        const ares = await executeBuildAction(pool, alt, perception, {});
-        execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
-        if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
-      }
-    }
 // Trade planner: produce a list of trade actions { type: 'buy'|'sell', resource, qty, counterpartyId }
 function tradePlanner(perception, opts = {}) {
   const { inventory, priceBaseMap, neighbors } = perception;
@@ -610,7 +597,19 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     const bres = await executeBuildAction(pool, bestBuild, perception, {});
     execResults.push({ action: { type: 'build', building: bestBuild.buildingId }, result: bres });
     if (bres && bres.success) return { success: true, cityId, acted: true, results: execResults };
-    // if build failed, fall back to trades
+    // if build failed, try to prioritize building a producer of the missing resource (if that was the reason)
+    if (bres && bres.success === false && bres.reason === 'insufficient_resources' && bres.resource) {
+      const missing = bres.resource;
+      logEvent({ type: 'build_missing_resource', entityId: cityId, missing });
+      // find a candidate that produces the missing resource and has capacity
+      const alt = (buildCandidates || []).find(c => c.produces && c.produces.includes(missing) && c.hasCapacity);
+      if (alt) {
+        logEvent({ type: 'build_try_alternative', entityId: cityId, original: bestBuild.buildingId, alternative: alt.buildingId, missing });
+        const ares = await executeBuildAction(pool, alt, perception, {});
+        execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
+        if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
+      }
+    }
   }
 
   // Execute trades (fallback or if no good build)
