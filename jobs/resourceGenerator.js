@@ -168,6 +168,7 @@ async function processEntity(entityId, options) {
                 if (poorRes.newCurrent !== undefined) {
                     // available = current - occupation for this bucket (clamped at 0)
                     const avail = Math.max(0, poorRes.newCurrent - occPoor);
+                    console.log('sumamos pobres ');
                     await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', poorRes.newCurrent, poorRes.max || 0, avail);
                     // update local popMap as well
                     popMap.poor = { current: poorRes.newCurrent, max: poorRes.max || 0 };
