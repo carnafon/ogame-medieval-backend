@@ -78,15 +78,17 @@ async function processEntity(entityId, options) {
         const extraWood = ticks * Math.floor(woodPerTick);
         const extraStone= ticks * Math.floor(stonePerTick);
 
-            // 🔹 Cargar inventario de recursos usando el servicio
-            const currentResources = await require('../utils/resourcesService').getResources(entityId);
+            // 🔹 Cargar inventario de recursos usando el servicio (client-aware)
+            const resourcesService = require('../utils/resourcesService');
+            // Lock resource rows for this entity to keep reads/writes consistent within the transaction
+            await resourcesService.lockResourceRowsWithClient(client, entityId);
+            const currentResources = await resourcesService.getResourcesWithClient(client, entityId);
 
             // 🔹 Actualizar cantidades para todas las claves producidas
             let produced = accrued || {};
             const newResources = { ...currentResources };
 
             // --- Consumo de recursos por población (se ejecuta antes de la producción) ---
-            const resourcesService = require('../utils/resourcesService');
             const { RESOURCE_CATEGORIES } = require('../utils/gameUtils');
             // fetch all resource types and partition by category
             const allTypes = await resourcesService.getResourceTypeNames(client);

@@ -168,9 +168,12 @@ async function setResourcesWithClientGeneric(client, entityId, resources) {
   for (const [key, value] of Object.entries(resources)) {
     if (!Object.prototype.hasOwnProperty.call(nameToId, key)) continue; // ignore unknown resource keys
     // Upsert pattern: update existing row
+    // Use INSERT ... ON CONFLICT to ensure the inventory row exists and set the absolute amount
     await client.query(
-      `UPDATE resource_inventory SET amount = GREATEST(0, $1) WHERE entity_id = $2 AND resource_type_id = $3`,
-      [value, entityId, nameToId[key]]
+      `INSERT INTO resource_inventory (entity_id, resource_type_id, amount)
+       VALUES ($1, $2, GREATEST(0, $3))
+       ON CONFLICT (entity_id, resource_type_id) DO UPDATE SET amount = GREATEST(0, $3)`,
+      [entityId, nameToId[key], value]
     );
   }
 
