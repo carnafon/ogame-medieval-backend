@@ -45,7 +45,6 @@ async function processEntity(entityId, options) {
     // If last_resource_update is missing, treat it as one tick ago so the
     // generator will process at least one tick on first run instead of
     // returning early because secondsElapsed would be 0.
-    console.log("Entity last_resource_update:", entity.last_resource_update);
     const last = entity.last_resource_update
         ? new Date(entity.last_resource_update)
         : new Date(Date.now() - (TICK_SECONDS * 1000));
@@ -355,8 +354,13 @@ async function runResourceGeneratorJob() {
             if (!r) continue;
             const entityIdLog = (r.entity && r.entity.id) || r.entityId || null;
             if (entityIdLog) {
-                if (r.resource_produced) console.log(`[RESOURCE_GEN] entity=${entityIdLog} produced:`, r.resource_produced);
-                if (r.resource_consumed) console.log(`[RESOURCE_GEN] entity=${entityIdLog} consumed:`, r.resource_consumed);
+                // Always show produced/consumed explicitly (null or object) so logs are consistent
+                console.log(`[RESOURCE_GEN] entity=${entityIdLog} produced:`, r.resource_produced || null);
+                console.log(`[RESOURCE_GEN] entity=${entityIdLog} consumed:`, r.resource_consumed || null);
+                // If we have produced but no consumed, also print raw deltas for debugging
+                if (r.resource_produced && !r.resource_consumed && r.resource_deltas) {
+                    console.log(`[RESOURCE_GEN] entity=${entityIdLog} deltas (debug):`, r.resource_deltas);
+                }
             }
         }
     } catch (logAllErr) {
