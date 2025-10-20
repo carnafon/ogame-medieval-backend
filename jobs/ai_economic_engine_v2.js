@@ -316,7 +316,7 @@ async function buildPlanner(perception, pool, opts = {}) {
       costGold += amt * base;
     }
 
-    // estimate marginal production value per tick (pre-adjust)
+  // estimate marginal production value per tick (pre-adjust)
     const prodKey = resolveProdKey(buildingId);
     const rates = prodKey ? (prodRatesAll[prodKey] || {}) : {};
     if (!prodKey) {
@@ -331,7 +331,12 @@ async function buildPlanner(perception, pool, opts = {}) {
       const base = priceBaseMap[res] || 1;
       rawValueSum += rate * base; // per level estimate
     }
-    if (rawValueSum <= 0) {
+
+    // Determine if this building should be excluded from production-value calculations
+    const lowerId = (buildingId || '').toString().toLowerCase();
+    const isSpecialProduction = (lowerId.includes('house') || lowerId.includes('casa') || lowerId.includes('sawmill') || lowerId.includes('aserradero') || lowerId.includes('quarry') || lowerId.includes('cantera') || lowerId.includes('farm') || lowerId.includes('granja'));
+
+    if (rawValueSum <= 0 && !isSpecialProduction) {
       // include a concise perceiveSnapshot value for debugging
       const perceptionSnapshotForLog = {
         inventory: perception && perception.inventory ? perception.inventory : {},
