@@ -61,9 +61,8 @@ async function perceiveSnapshot(pool, entityId, opts = {}) {
   const x = entRow.x_coord || 0;
   const y = entRow.y_coord || 0;
 
-  // load inventory
-  const invRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`, [entityId]);
-  const inventory = Object.fromEntries(invRes.rows.map(r => [r.name, parseInt(r.amount, 10) || 0]));
+  // load inventory via resourcesService
+  const inventory = await resourcesService.getResourcesWithClient(client, entityId);
 
   // load price_base map
   const ptRes = await client.query('SELECT lower(name) as name, price_base FROM resource_types');
@@ -151,8 +150,8 @@ async function executeTradeAction(pool, action, perception, opts = {}) {
       // find a neighbor to buy (one with inventory < buyLow)
       let buyerId = null;
       for (const nb of perception.neighbors) {
-        const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resource]);
-        const neighborAmt = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
+        const nInv = await resourcesService.getResourcesWithClient(client, nb.id);
+        const neighborAmt = (nInv && nInv[resource]) || 0;
         const buyLow = Math.max(1, Math.round((opts.baseBuyDiv || 120) / base));
         if (neighborAmt < buyLow) { buyerId = nb.id; break; }
       }
@@ -176,8 +175,8 @@ async function executeTradeAction(pool, action, perception, opts = {}) {
       // BUY: find a neighbor seller with available stock > safety
       let sellerId = null;
       for (const nb of perception.neighbors) {
-        const nRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND lower(rt.name) = $2`, [nb.id, resource]);
-        const sellerStock = (nRes.rows[0] && parseInt(nRes.rows[0].amount, 10)) || 0;
+        const nInv = await resourcesService.getResourcesWithClient(client, nb.id);
+        const sellerStock = (nInv && nInv[resource]) || 0;
         if (sellerStock > (opts.safetyStock || DEFAULTS.SAFETY_STOCK)) { sellerId = nb.id; break; }
       }
       if (!sellerId) { await client.query('ROLLBACK'); return { success: false, reason: 'no_seller' }; }
@@ -440,12 +439,9 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
   try {
     await client.query('BEGIN');
 
-    // lock resource inventory rows for entity
-    await client.query(`SELECT ri.id FROM resource_inventory ri WHERE ri.entity_id = $1 FOR UPDATE`, [entityId]);
-
-    // re-check resource amounts
-    const invRes = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`, [entityId]);
-    const currentResources = Object.fromEntries(invRes.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10) || 0]));
+  // lock resource inventory rows for entity and re-check via resourcesService
+  await resourcesService.lockResourceRowsWithClient(client, entityId);
+  const currentResources = await resourcesService.getResourcesWithClient(client, entityId);
 
     for (const r in reqs.requiredCost) {
       const needAmt = reqs.requiredCost[r] || 0;
@@ -474,12 +470,17 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       }
     }
 
-    // Deduct resources
-    for (const r in reqs.requiredCost) {
-      const amount = reqs.requiredCost[r] || 0;
-      if (amount <= 0) continue;
-      await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE lower(name) = $3)`, [amount, entityId, r.toString().toLowerCase()]);
-      logEvent({ type: 'build_deduct_resource', entityId, buildingId, resource: r, amount });
+    // Deduct resources using generic consumer helper
+    const costs = {};
+    for (const r in reqs.requiredCost) { const amount = reqs.requiredCost[r] || 0; if (amount > 0) costs[r.toString().toLowerCase()] = amount; }
+    try {
+      await resourcesService.consumeResourcesWithClientGeneric(client, entityId, costs);
+      for (const r in costs) logEvent({ type: 'build_deduct_resource', entityId, buildingId, resource: r, amount: costs[r] });
+    } catch (consErr) {
+      // log and rollback
+      logEvent({ type: 'build_failed_consume', entityId, buildingId, err: consErr && consErr.message });
+      await client.query('ROLLBACK');
+      return { success: false, reason: 'insufficient_resources', resource: consErr && consErr.resource };
     }
 
     // Persist building level increment

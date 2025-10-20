@@ -11,12 +11,7 @@ router.get('/', authenticateToken, async (req, res) => {
   if (!entityId) return res.status(400).json({ message: 'Falta entityId en la petición.' });
 
   try {
-    const q = `SELECT rt.name, ri.amount
-               FROM resource_inventory ri
-               JOIN resource_types rt ON ri.resource_type_id = rt.id
-               WHERE ri.entity_id = $1`;
-    const result = await pool.query(q, [entityId]);
-    const resources = Object.fromEntries(result.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+    const resources = await require('../utils/resourcesService').getResources(entityId);
     res.json({ entityId: Number(entityId), resources });
   } catch (err) {
     console.error('Error al obtener recursos:', err.message);
@@ -31,42 +26,15 @@ router.post('/', authenticateToken, async (req, res) => {
   const { entityId, resources } = req.body || {};
   if (!entityId || !resources) return res.status(400).json({ message: 'Faltan campos: entityId y resources.' });
 
+  const resourcesService = require('../utils/resourcesService');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    // For update lock
+    // lock entity row to coordinate with other entity-level ops
     await client.query(`SELECT id FROM entities WHERE id = $1 FOR UPDATE`, [entityId]);
-    // Update any provided resource by name; ignore unknown keys
-    const existingTypesRes = await client.query(`SELECT id, name FROM resource_types`);
-    const nameToId = Object.fromEntries(existingTypesRes.rows.map(r => [r.name.toLowerCase(), r.id]));
-
-    for (const [k, v] of Object.entries(resources)) {
-      // only update numeric values and known resource types
-      if (typeof v !== 'number') continue;
-      const lname = k.toLowerCase();
-      const typeId = nameToId[lname];
-      if (!typeId) continue; // skip unknown resource names
-
-      await client.query(
-        `UPDATE resource_inventory SET amount = $1 WHERE entity_id = $2 AND resource_type_id = $3`,
-        [v, entityId, typeId]
-      );
-    }
-
-    // Leer recursos actualizados
-    const updated = await client.query(
-      `SELECT rt.name, ri.amount
-       FROM resource_inventory ri
-       JOIN resource_types rt ON ri.resource_type_id = rt.id
-       WHERE ri.entity_id = $1`,
-      [entityId]
-    );
-
+    const updated = await resourcesService.setResourcesWithClientGeneric(client, entityId, resources);
     await client.query('COMMIT');
-
-    const resourcesRes = Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
-    res.json({ message: 'Recursos actualizados.', entityId: Number(entityId), resources: resourcesRes });
+    res.json({ message: 'Recursos actualizados.', entityId: Number(entityId), resources: updated });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Error al actualizar recursos:', err.message);
@@ -160,87 +128,9 @@ router.post('/trade', authenticateToken, async (req, res) => {
 
     // Lock buyer and seller inventory rows for the two resource types (resource and gold)
     // We lock all inventory rows for both entities to simplify and avoid deadlocks ordering issues by always locking in entity id order
-    const idsToLock = [buyerId, sellerId].map(id => parseInt(id, 10)).sort((a, b) => a - b);
-
-    for (const eid of idsToLock) {
-      await client.query(
-        `SELECT ri.id FROM resource_inventory ri WHERE ri.entity_id = $1 FOR UPDATE`,
-        [eid]
-      );
-    }
-
-    // Read current amounts
-    const invRes = await client.query(
-      `SELECT ri.entity_id, rt.id as resource_type_id, lower(rt.name) as name, ri.amount
-       FROM resource_inventory ri
-       JOIN resource_types rt ON ri.resource_type_id = rt.id
-       WHERE ri.entity_id = ANY($1::int[]) AND (rt.id = $2 OR rt.id = $3)`,
-      [[buyerId, sellerId], resourceTypeId, goldTypeId]
-    );
-
-    // Map: entity -> { resourceName: amount }
-    const byEntity = {};
-    for (const row of invRes.rows) {
-      const eid = String(row.entity_id);
-      if (!byEntity[eid]) byEntity[eid] = {};
-      byEntity[eid][row.name] = parseInt(row.amount, 10);
-    }
-
-    const buyerInv = byEntity[String(buyerId)] || {};
-    const sellerInv = byEntity[String(sellerId)] || {};
-
-    const buyerGold = buyerInv['gold'] || 0;
-    const sellerResource = sellerInv[resource.toString().toLowerCase()] || 0;
-
-    const totalCost = Number(price) * qty;
-
-    if (buyerGold < totalCost) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: 'Fondos insuficientes en comprador', have: buyerGold, need: totalCost });
-    }
-    if (sellerResource < qty) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: 'Stock insuficiente en vendedor', have: sellerResource, need: qty });
-    }
-
-    // Perform updates: subtract gold from buyer, add gold to seller, subtract resource from seller, add resource to buyer
-    await client.query(
-      `UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`,
-      [totalCost, buyerId, goldTypeId]
-    );
-    await client.query(
-      `UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`,
-      [totalCost, sellerId, goldTypeId]
-    );
-
-    await client.query(
-      `UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`,
-      [qty, sellerId, resourceTypeId]
-    );
-    await client.query(
-      `UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`,
-      [qty, buyerId, resourceTypeId]
-    );
-
-    // Return updated snapshots for both entities
-    const updatedRes = await client.query(
-      `SELECT ri.entity_id, rt.name, ri.amount
-       FROM resource_inventory ri
-       JOIN resource_types rt ON ri.resource_type_id = rt.id
-       WHERE ri.entity_id = ANY($1::int[])
-       ORDER BY ri.entity_id, rt.id`,
-      [[buyerId, sellerId]]
-    );
-
+    // Use marketService.tradeWithClient which now uses resourcesService internally
+    const snapshot = await marketService.tradeWithClient(client, buyerId, sellerId, resource, price, qty);
     await client.query('COMMIT');
-
-    const snapshot = {};
-    for (const r of updatedRes.rows) {
-      const eid = String(r.entity_id);
-      if (!snapshot[eid]) snapshot[eid] = {};
-      snapshot[eid][r.name.toLowerCase()] = parseInt(r.amount, 10);
-    }
-
     res.json({ message: 'Trade ejecutado correctamente', buyerId: Number(buyerId), sellerId: Number(sellerId), resource: resource.toString().toLowerCase(), price: Number(price), amount: qty, snapshot });
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }

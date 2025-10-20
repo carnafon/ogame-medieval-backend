@@ -113,16 +113,9 @@ async function runEconomicUpdate(pool) {
                     const produced = calculateProductionForDuration(buildings, popStats, TICK_SECONDS);
                     if (produced && Object.keys(produced).length > 0) {
                         console.log(`[AI Engine] entity=${entityId} produced (deltas):`, produced);
-                        // Read current inventory (lock rows) and apply deltas to compute absolute new amounts
-                        const invRows = await client.query(
-                            `SELECT lower(rt.name) as name, ri.amount
-                             FROM resource_inventory ri
-                             JOIN resource_types rt ON ri.resource_type_id = rt.id
-                             WHERE ri.entity_id = $1
-                             FOR UPDATE`,
-                            [entityId]
-                        );
-                        const before = Object.fromEntries(invRows.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+                        // Lock resource rows and read current inventory via resourcesService
+                        await resourcesService.lockResourceRowsWithClient(client, entityId);
+                        const before = await resourcesService.getResourcesWithClient(client, entityId);
                         const toWrite = {};
                         Object.keys(produced).forEach(k => {
                             const key = k.toString().toLowerCase();
@@ -134,12 +127,8 @@ async function runEconomicUpdate(pool) {
                         await resourcesService.setResourcesWithClientGeneric(client, entityId, toWrite);
                         // update the entities.last_resource_update timestamp so other systems can inspect it
                         await client.query('UPDATE entities SET last_resource_update = $1 WHERE id = $2', [now.toISOString(), entityId]);
-                        // log after snapshot
-                        const afterRows = await client.query(
-                            `SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
-                            [entityId]
-                        );
-                        const after = Object.fromEntries(afterRows.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+                        // log after snapshot via resourcesService
+                        const after = await resourcesService.getResourcesWithClient(client, entityId);
                         console.log(`[AI Engine] entity=${entityId} resource after:`, after);
                     } else {
                         console.log(`[AI Engine] entity=${entityId} produced nothing this tick.`);
@@ -160,13 +149,12 @@ async function runEconomicUpdate(pool) {
                     let bestScore = Infinity; // lower score is better
 
                     // Load current resources (light read, no FOR UPDATE) to let AI prefer food buildings when starving
+                    // light read of resources
                     let currentResourcesLight = {};
                     try {
-                        const rr = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 AND rt.name IN ('wood','stone','food')`, [entityId]);
-                        currentResourcesLight = Object.fromEntries(rr.rows.map(r => [r.name, parseInt(r.amount, 10)]));
-                    } catch (e) {
-                        currentResourcesLight = {};
-                    }
+                        const all = await resourcesService.getResourcesWithClient(client, entityId);
+                        currentResourcesLight = { wood: all.wood || 0, stone: all.stone || 0, food: all.food || 0 };
+                    } catch (e) { currentResourcesLight = {}; }
 
                     // If production for food this tick was negative or food stock is low, prefer to build a farm if present
                     const foodProduced = (typeof produced === 'object' && typeof produced.food === 'number') ? produced.food : 0;
@@ -231,8 +219,8 @@ async function runEconomicUpdate(pool) {
                                     const houseReqs = calculateUpgradeRequirementsFromConstants(bucketHouse, houseLevel);
                                     if (houseReqs) {
                                         // quick resource check
-                                        const rr = await client.query(`SELECT lower(rt.name) as name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 FOR UPDATE`, [entityId]);
-                                        const currentResources = Object.fromEntries(rr.rows.map(r => [r.name, parseInt(r.amount, 10)]));
+                                        await resourcesService.lockResourceRowsWithClient(client, entityId);
+                                        const currentResources = await resourcesService.getResourcesWithClient(client, entityId);
                                         let enoughForHouse = true;
                                         for (const r in houseReqs.requiredCost) {
                                             if ((currentResources[r] || 0) < houseReqs.requiredCost[r]) { enoughForHouse = false; break; }
@@ -259,9 +247,9 @@ async function runEconomicUpdate(pool) {
                             }
 
                             // After possible house fallback, attempt resource check and build if resources suffice
-                            // lock and read resource_inventory
-                            const rows = await client.query(`SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1 FOR UPDATE`, [entityId]);
-                            const currentResources = Object.fromEntries(rows.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
+                            // lock and read resource_inventory via resourcesService
+                            await resourcesService.lockResourceRowsWithClient(client, entityId);
+                            const currentResources = await resourcesService.getResourcesWithClient(client, entityId);
 
                             let hasEnough = true;
                             const missing = {};
@@ -306,12 +294,15 @@ async function runEconomicUpdate(pool) {
                             }
 
                             if (hasEnough) {
-                                // Deduct resources
+                                // Deduct resources via resourcesService adjust helper
+                                const deltas = {};
                                 for (const resource in reqs.requiredCost) {
                                     const amount = reqs.requiredCost[resource] || 0;
                                     if (amount <= 0) continue;
-                                    await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = (SELECT id FROM resource_types WHERE name = $3)`, [amount, entityId, resource]);
+                                    deltas[resource.toString().toLowerCase()] = -Math.abs(amount);
                                 }
+                                await resourcesService.adjustResourcesWithClientGeneric(client, entityId, deltas);
+
 
                                 // Persist building level increment
                                 const blRes = await client.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityId, bestUpgrade]);

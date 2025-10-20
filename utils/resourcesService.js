@@ -106,6 +106,20 @@ async function getResourceTypeNames(client = null) {
   return res.rows.map(r => (r.name || '').toLowerCase());
 }
 
+// Client-aware getter for resource amounts for an entity (returns map name->amount)
+async function getResourcesWithClient(client, entityId) {
+  const res = await client.query(
+    `SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
+    [entityId]
+  );
+  return Object.fromEntries(res.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10) || 0]));
+}
+
+// Client-aware lock helper (SELECT FOR UPDATE) to centralize locking
+async function lockResourceRowsWithClient(client, entityId) {
+  await client.query(`SELECT ri.id FROM resource_inventory ri WHERE ri.entity_id = $1 FOR UPDATE`, [entityId]);
+}
+
 // Consume (subtract) costs atomically. costs: { wood, stone, food }
 // Returns updated resources or throws Error('Recursos insuficientes')
 async function consumeResources(entityId, costs) {
@@ -278,6 +292,39 @@ async function consumeResourcesWithClientGeneric(client, entityId, costs) {
   return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
 }
 
+// Adjust resources by deltas (positive to add, negative to subtract). Deltas keys are resource names lowercased.
+// Applies GREATEST(0, amount + delta) to avoid negative amounts. Returns updated snapshot map.
+async function adjustResourcesWithClientGeneric(client, entityId, deltas) {
+  if (!deltas || Object.keys(deltas).length === 0) {
+    const updated = await client.query(
+      `SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
+      [entityId]
+    );
+    return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10) || 0]));
+  }
+
+  const resTypes = await client.query(`SELECT id, lower(name) as name FROM resource_types`);
+  const nameToId = Object.fromEntries(resTypes.rows.map(r => [r.name, r.id]));
+
+  for (const [k, v] of Object.entries(deltas)) {
+    const key = (k || '').toString().toLowerCase();
+    const delta = Number(v) || 0;
+    if (!Object.prototype.hasOwnProperty.call(nameToId, key)) continue; // skip unknown
+    if (delta === 0) continue;
+    // Note: use GREATEST to prevent negative final amounts
+    await client.query(
+      `UPDATE resource_inventory SET amount = GREATEST(0, amount + $1) WHERE entity_id = $2 AND resource_type_id = $3`,
+      [delta, entityId, nameToId[key]]
+    );
+  }
+
+  const updated = await client.query(
+    `SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
+    [entityId]
+  );
+  return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10) || 0]));
+}
+
 module.exports = {
   getResources,
   setResources,
@@ -291,3 +338,8 @@ module.exports.setResourcesWithClientGeneric = setResourcesWithClientGeneric;
 module.exports.getResourceTypeNames = getResourceTypeNames;
 // Export generic consumer
 module.exports.consumeResourcesWithClientGeneric = consumeResourcesWithClientGeneric;
+// export client-aware helpers
+module.exports.getResourcesWithClient = getResourcesWithClient;
+module.exports.lockResourceRowsWithClient = lockResourceRowsWithClient;
+// export adjust helper
+module.exports.adjustResourcesWithClientGeneric = adjustResourcesWithClientGeneric;

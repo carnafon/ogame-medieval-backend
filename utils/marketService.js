@@ -38,28 +38,15 @@ async function tradeWithClient(client, buyerId, sellerId, resourceName, pricePer
   if (!goldRtRes.rows.length) throw new Error('Gold resource type missing');
   const goldTypeId = goldRtRes.rows[0].id;
 
+  // Lock both participant rows (sorted to avoid deadlocks)
   const idsToLock = [buyerId, sellerId].map(id => parseInt(id, 10)).sort((a, b) => a - b);
   for (const eid of idsToLock) {
     await client.query(`SELECT ri.id FROM resource_inventory ri WHERE ri.entity_id = $1 FOR UPDATE`, [eid]);
   }
 
-  const invRes = await client.query(
-    `SELECT ri.entity_id, rt.id as resource_type_id, lower(rt.name) as name, ri.amount
-     FROM resource_inventory ri
-     JOIN resource_types rt ON ri.resource_type_id = rt.id
-     WHERE ri.entity_id = ANY($1::int[]) AND (rt.id = $2 OR rt.id = $3)`,
-    [[buyerId, sellerId], resourceTypeId, goldTypeId]
-  );
-
-  const byEntity = {};
-  for (const row of invRes.rows) {
-    const eid = String(row.entity_id);
-    if (!byEntity[eid]) byEntity[eid] = {};
-    byEntity[eid][row.name] = parseInt(row.amount, 10);
-  }
-
-  const buyerInv = byEntity[String(buyerId)] || {};
-  const sellerInv = byEntity[String(sellerId)] || {};
+  // Load current snapshots via resourcesService
+  const buyerInv = await require('./resourcesService').getResourcesWithClient(client, buyerId);
+  const sellerInv = await require('./resourcesService').getResourcesWithClient(client, sellerId);
 
   const buyerGold = buyerInv['gold'] || 0;
   const sellerResource = sellerInv[resourceName.toString().toLowerCase()] || 0;
@@ -68,26 +55,18 @@ async function tradeWithClient(client, buyerId, sellerId, resourceName, pricePer
   if (buyerGold < totalCost) throw new Error('Buyer lacks gold');
   if (sellerResource < qty) throw new Error('Seller lacks stock');
 
-  await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`, [totalCost, buyerId, goldTypeId]);
-  await client.query(`UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`, [totalCost, sellerId, goldTypeId]);
+  // Apply adjustments atomically using resourcesService helper
+  const resourcesService = require('./resourcesService');
+  // buyer: -gold, +resource; seller: +gold, -resource
+  await resourcesService.adjustResourcesWithClientGeneric(client, buyerId, { gold: -totalCost, [resourceName.toString().toLowerCase()]: qty });
+  await resourcesService.adjustResourcesWithClientGeneric(client, sellerId, { gold: totalCost, [resourceName.toString().toLowerCase()]: -qty });
 
-  await client.query(`UPDATE resource_inventory SET amount = amount - $1 WHERE entity_id = $2 AND resource_type_id = $3`, [qty, sellerId, resourceTypeId]);
-  await client.query(`UPDATE resource_inventory SET amount = amount + $1 WHERE entity_id = $2 AND resource_type_id = $3`, [qty, buyerId, resourceTypeId]);
-
-  const updatedRes = await client.query(
-    `SELECT ri.entity_id, rt.name, ri.amount
-     FROM resource_inventory ri
-     JOIN resource_types rt ON ri.resource_type_id = rt.id
-     WHERE ri.entity_id = ANY($1::int[])
-     ORDER BY ri.entity_id, rt.id`,
-    [[buyerId, sellerId]]
-  );
+  // Return snapshot for both entities
+  const snapshotBuyer = await resourcesService.getResourcesWithClient(client, buyerId);
+  const snapshotSeller = await resourcesService.getResourcesWithClient(client, sellerId);
   const snapshot = {};
-  for (const r of updatedRes.rows) {
-    const eid = String(r.entity_id);
-    if (!snapshot[eid]) snapshot[eid] = {};
-    snapshot[eid][r.name.toLowerCase()] = parseInt(r.amount, 10);
-  }
+  snapshot[String(buyerId)] = snapshotBuyer;
+  snapshot[String(sellerId)] = snapshotSeller;
   return snapshot;
 }
 
