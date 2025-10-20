@@ -75,7 +75,8 @@ async function getEntityById(clientOrPool, id, forUpdate = false) {
 
   // Detect once whether ai_runtime column exists and include it only if present.
   const hasAi = await _hasAiRuntimeColumn(client);
-  const selectCols = 'e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord' + (hasAi ? ', e.ai_runtime' : '');
+  // include last_resource_update so callers (eg. resourceGenerator) can compute elapsed time
+  const selectCols = 'e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord, e.last_resource_update' + (hasAi ? ', e.ai_runtime' : '');
   const q = forUpdate ? `SELECT ${selectCols} FROM entities e WHERE e.id = $1 FOR UPDATE` : `SELECT ${selectCols} FROM entities e WHERE e.id = $1`;
 
   if (usingClient) {
