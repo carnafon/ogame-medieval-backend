@@ -246,6 +246,7 @@ module.exports = {
   createEntityWithResources,
   getEntityById,
   getEntityByUserId,
+  findEntityByCoords,
   getEntityCoords,
   lockEntity,
   listEntitiesForMap,
