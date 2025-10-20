@@ -301,12 +301,8 @@ async function processEntity(entityId, options) {
             // Para soportar recursos dinámicos, llamamos a la función genérica que actualice cualquier recurso.
             const rs = require('../utils/resourcesService');
             try {
-                // Debug snapshot: current/new
-                console.debug(`[RESOURCE_GEN][DEBUG] entity=${entityId} currentResources snapshot:`, currentResources);
-                console.debug(`[RESOURCE_GEN][DEBUG] entity=${entityId} newResources intent:`, newResources);
                 await rs.setResourcesWithClientGeneric(client, entityId, newResources);
                 const after = await rs.getResourcesWithClient(client, entityId);
-                console.debug(`[RESOURCE_GEN][DEBUG] entity=${entityId} afterResources snapshot:`, after);
             } catch (saveErr) {
                 console.warn(`[RESOURCE_GEN] Failed to save resources for entity=${entityId}:`, saveErr && saveErr.message);
                 throw saveErr;

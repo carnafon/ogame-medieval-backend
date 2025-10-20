@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------
 // ⭐️ CONSTANTES DE POBLACIÓN Y PRODUCCIÓN
 // -----------------------------------------------------------------
-const BASE_POPULATION = 10;
+const BASE_POPULATION = 1;
 const POPULATION_PER_HOUSE = 5;
 const FOOD_CONSUMPTION_PER_CITIZEN = 1;
 
@@ -12,25 +12,26 @@ const COORD_RADIUS = 25; // Radio de la zona de influencia de la facción (ej: 2
 
 
 // Tasa de producción por edificio (por intervalo de 10 segundos)
-// Cada entrada describe la producción neta por tick para recursos según claves en la DB (ej: wood, stone, food, water, clay, leather, coal, copper, wool, honey)
+// Cada entrada describe la producción neta por tick para recursos según claves en la DB
+// Valores balanceados: 1 unidad por tick por nivel para productores primarios, y 1 por tick para procesadores.
 const PRODUCTION_RATES = {
-    'house': { },
-    'sawmill': { wood: 50, food: 0 },
-    'quarry': { stone: 8, food: 0 },
-    'farm': { food: 10, wood: 0 },
+    'house': {},
+    'sawmill': { wood: 1 },
+    'quarry': { stone: 1 },
+    'farm': { food: 1 },
     // Nuevos edificios para recursos comunes
-    'well': { water: 5 },
-    'clay_pit': { clay: 4 },
-    'tannery': { leather: 3 },
-    'coal_mine': { coal: 3 },
-    'copper_mine': { copper: 3 },
-    'sheepfold': { wool: 2, food: 0 },
+    'well': { water: 1 },
+    'clay_pit': { clay: 1 },
+    'tannery': { leather: 1 },
+    'coal_mine': { coal: 1 },
+    'copper_mine': { copper: 1 },
+    'sheepfold': { wool: 1 },
     'apiary': { honey: 1 }
 };
 
 // Procesados adicionales: cada edificio produce 1 unidad por tick (10s) de su producto
-// Carpinteria produces processed wood (lumber) and also yields some raw wood per tick
-PRODUCTION_RATES['carpinteria'] = { lumber: 1, wood: 20};
+// Carpinteria produce lumber (procesado)
+PRODUCTION_RATES['carpinteria'] = { lumber: 1 };
 PRODUCTION_RATES['fabrica_ladrillos'] = { baked_brick: 1 };
 PRODUCTION_RATES['bazar_especias'] = { spice: 1 };
 PRODUCTION_RATES['alfareria'] = { refined_clay: 1 };
@@ -61,34 +62,32 @@ PRODUCTION_RATES['telar_real'] = { royal_silk: 1 };
 PRODUCTION_RATES['sastreria'] = { silk_cloth: 1 };
 
 // Procesamiento: productos que requieren insumos por unidad producida.
-// Mapeo: producto -> { inputResource: amountPerUnit, ... }
+// Recetas simplificadas y balanceadas para que 1 procesador pueda consumir la producción
+// de productores durante 60s (6 ticks) de forma coherente.
 const PROCESSING_RECIPES = {
-    // La Sastrería produce silk_cloth consumiendo 10 wool, 2 wood y 1 purple_dye por unidad
-    silk_cloth: { wool: 10, wood: 2, purple_dye: 1 }
-    // Otros procesos añadidos
-    , lumber: { wood: 5, stone: 1 }
-    , baked_brick: { clay: 8, coal: 2 }
-    , spice: { food: 5, honey: 2 }
-    , refined_clay: { clay: 6, water: 3 }
-    , purple_dye: { wool: 6, copper: 1 }
-    , iron_ingot: { copper: 4, coal: 3 }
-    , salted: { leather: 3, stone: 1 }
-    , books: { wool: 2, wood: 4 }
-    , beer: { food: 6, water: 4 }
-    , tools: { copper: 3, wood: 2 }
-    , preservation_elixir: { honey: 4, spice: 3 }
-    , royal_dye: { copper: 2, purple_dye: 2 }
-    , illustrated_parchment: { water: 2, books: 3 }
-    , explosive_compound: { coal: 5, baked_brick: 2 }
-    , damascus_steel: { stone: 6, iron_ingot: 2 }
-    , linen: { leather: 4, silk_cloth: 2 }
-        // Strategic processing recipes
-        , golden_dye: { wool: 5, silk_cloth: 2, royal_dye: 1 }
-        , rare_iron: { stone: 10, iron_ingot: 2, damascus_steel: 1 }
-        , sea_salt: { food: 8, beer: 2, preservation_elixir: 1 }
-        , sulfur: { coal: 6, explosive_compound: 1, tools: 1 }
-        , gems: { copper: 5, explosive_compound: 1, refined_clay: 2 }
-        , royal_silk: { honey: 4, salted: 2, linen: 3 }
+    silk_cloth: { wool: 1, wood: 1, purple_dye: 1 },
+    lumber: { wood: 1, stone: 1 },
+    baked_brick: { clay: 1, coal: 1 },
+    spice: { food: 1, honey: 1 },
+    refined_clay: { clay: 1, water: 1 },
+    purple_dye: { wool: 1, copper: 1 },
+    iron_ingot: { copper: 1, coal: 1 },
+    salted: { leather: 1, stone: 1 },
+    books: { wool: 1, wood: 1 },
+    beer: { food: 1, water: 1 },
+    tools: { copper: 1, wood: 1 },
+    preservation_elixir: { honey: 1, spice: 1 },
+    royal_dye: { copper: 1, purple_dye: 1 },
+    illustrated_parchment: { water: 1, books: 1 },
+    explosive_compound: { coal: 1, baked_brick: 1 },
+    damascus_steel: { stone: 1, iron_ingot: 1 },
+    linen: { leather: 1, silk_cloth: 1 },
+    golden_dye: { wool: 1, silk_cloth: 1, royal_dye: 1 },
+    rare_iron: { stone: 1, iron_ingot: 1, damascus_steel: 1 },
+    sea_salt: { food: 1, beer: 1, preservation_elixir: 1 },
+    sulfur: { coal: 1, explosive_compound: 1, tools: 1 },
+    gems: { copper: 1, explosive_compound: 1, refined_clay: 1 },
+    royal_silk: { honey: 1, salted: 1, linen: 1 }
 };
 
 // Longitud de un "tick" en segundos (coincide con las tasas anteriores)

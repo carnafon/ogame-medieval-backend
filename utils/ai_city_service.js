@@ -51,13 +51,30 @@ async function createPairedCity(clientOrPool, cityData) {
     // Using existing client
     const client = clientOrPool;
 
-    // Compute initialResources: prefer explicit initialResources, otherwise default 1000 for every resource type
+    // Compute initialResources: prefer explicit initialResources, otherwise use balanced AI defaults
     let initialResources = cityData.initialResources;
     if (!initialResources || Object.keys(initialResources).length === 0) {
+        // Balanced defaults for AI cities (small starting push)
+        const aiDefaults = {
+            wood: 80,
+            stone: 70,
+            food: 120,
+            water: 20,
+            coal: 10,
+            clay: 10,
+            honey: 4,
+            wool: 4,
+            copper: 8,
+            leather: 4
+        };
         const resourcesService = require('./resourcesService');
         const rtRes = await resourcesService.getResourceTypesWithClient(client);
         initialResources = {};
-        rtRes.forEach(r => { initialResources[(r.name || '').toLowerCase()] = 1000; });
+        // Only assign values for known resource types; others default to 0
+        rtRes.forEach(r => {
+            const name = (r.name || '').toLowerCase();
+            initialResources[name] = typeof aiDefaults[name] === 'number' ? aiDefaults[name] : 0;
+        });
     }
 
     // 1. crear la fila de entidad usando el servicio compartido

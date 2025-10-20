@@ -74,11 +74,25 @@ router.post('/register', async (req, res) => {
         const { createEntityWithResources } = require('../utils/entityService');
         const resourcesService = require('../utils/resourcesService');
         const resourceTypes = await resourcesService.getResourceTypes();
+        // Balanced starter defaults for human player
+        const playerDefaults = {
+          wood: 140,
+          stone: 120,
+          food: 200,
+          water: 40,
+          coal: 30,
+          clay: 30,
+          honey: 10,
+          wool: 10,
+          copper: 20,
+          leather: 10
+        };
         const defaults = {};
         for (const r of resourceTypes) {
           const name = (r.name || '').toLowerCase();
-          defaults[name] = (new Set(['wood','stone','water','food']).has(name)) ? 100 : 0;
+          defaults[name] = typeof playerDefaults[name] === 'number' ? playerDefaults[name] : 0;
         }
+
         const newEntity = await createEntityWithResources(pool, {
           user_id: userId,
           faction_id: factionId,
