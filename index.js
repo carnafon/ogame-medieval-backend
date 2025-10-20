@@ -71,11 +71,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
                     }
                 };
 
-                const runV1 = async () => {
-                    const ai1 = require('./jobs/ai_economic_engine');
-                    if (!ai1 || typeof ai1.runEconomicUpdate !== 'function') throw new Error('v1 missing runEconomicUpdate');
-                    return await ai1.runEconomicUpdate(pool);
-                };
+                // v1 has been removed; we only attempt v2 here.
 
                 const promiseWithTimeout = (p, ms) => new Promise((resolve, reject) => {
                     const t = setTimeout(() => reject(new Error('AI engine timeout')), ms);
@@ -130,13 +126,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
                 }
 
                 if (!usedV2) {
-                    try {
-                        console.log('[WEB-CRON] Running AI engine v1 (legacy)');
-                        await promiseWithTimeout(runV1(), AI_TIMEOUT_MS);
-                        console.log('[WEB-CRON] AI v1 finished');
-                    } catch (err) {
-                        console.error('[WEB-CRON] AI v1 failed or timed out:', err && err.message);
-                    }
+                    console.log('[WEB-CRON] Skipping AI engine run because v2 was not selected or failed. v1 has been removed.');
                 }
 
             } catch (aiErr) {

@@ -3,7 +3,7 @@ const router = express.Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const aiCityService = require('../utils/ai_city_service');
-const aiEngine = require('../jobs/ai_economic_engine');
+const aiEngine = require('../jobs/ai_economic_engine_v2');
 
 // List AI cities
 router.get('/', authenticateToken, async (req, res) => {
@@ -38,12 +38,12 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// Trigger a single-city economic update (for testing)
+// Trigger a single-city economic update (for testing) using v2
 router.post('/:id/run', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
-        await aiEngine.runEconomicUpdateForCity(pool, Number(id));
-        res.json({ message: 'AI city update triggered' });
+        await aiEngine.runCityTick(pool, Number(id));
+        res.json({ message: 'AI city update (v2) triggered' });
     } catch (err) {
         res.status(500).json({ message: 'Error ejecutando update', error: err.message });
     }

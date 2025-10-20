@@ -158,8 +158,8 @@ router.post('/build', async (req, res) => {
 
         // If the building consumes population, decrement one unit from the 'poor' bucket by default
         if (buildingType !== 'house') {
-            // Decrement one unit from poor bucket, persist using centralized values
-            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.max(0, currPop - 1), maxPop, Math.max(0, maxPop - (currPop - 1)));
+            // Decrement one unit from poor bucket and compute available centralised
+            await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.max(0, currPop - 1), maxPop);
         }
 
         // If new building is one of the special houses, increase the appropriate population max bucket
@@ -197,18 +197,17 @@ router.post('/build', async (req, res) => {
             const newCalc = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
             const newBreak = newCalc.breakdown || {};
             const newMax = newCalc.max || 0;
-            await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', Math.min(newMax, (newBreak.poor || 0) + 1), newMax, Math.max(0, newMax - (Math.min(newMax, (newBreak.poor || 0) + 1))));
+            await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.min(newMax, (newBreak.poor || 0) + 1), newMax);
         }
         // If the built building is a house, increase poor.max_population
-                if (buildingType === 'house') {
+        if (buildingType === 'house') {
             try {
                 const gu = require('../utils/gameUtils');
                 const inc = gu.POPULATION_PER_HOUSE || 5;
                 const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'poor');
                 const cur = Number(prow.current || 0);
                 const maxv = Number(prow.max || 0) + inc;
-                const avail = Math.max(0, maxv - cur);
-                await populationService.setPopulationForTypeWithClient(client, entity.id, 'poor', cur, maxv, avail);
+                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', cur, maxv);
             } catch (e) {
                 console.warn('Failed to update house population bucket (poor):', e.message);
             }

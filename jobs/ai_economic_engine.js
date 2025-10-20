@@ -581,30 +581,27 @@ async function completeConstruction(client, ai, entityRow) {
             if (prow.rows.length > 0) {
                 const cur = parseInt(prow.rows[0].current_population || 0, 10);
                 const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                const avail = Math.max(0, maxv - cur);
-                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'burgess', cur, maxv, avail);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityRow.id, 'burgess', cur, maxv);
             } else {
-                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'burgess', 0, inc, inc);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityRow.id, 'burgess', 0, inc);
             }
         } else if (building_id === 'casa_de_ladrillos') {
             const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityRow.id, 'patrician']);
             if (prow.rows.length > 0) {
                 const cur = parseInt(prow.rows[0].current_population || 0, 10);
                 const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                const avail = Math.max(0, maxv - cur);
-                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'patrician', cur, maxv, avail);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityRow.id, 'patrician', cur, maxv);
             } else {
-                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'patrician', 0, inc, inc);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityRow.id, 'patrician', 0, inc);
             }
         } else if (building_id === 'house') {
             const prow = await client.query('SELECT current_population, max_population FROM populations WHERE entity_id = $1 AND type = $2 LIMIT 1', [entityRow.id, 'poor']);
             if (prow.rows.length > 0) {
                 const cur = parseInt(prow.rows[0].current_population || 0, 10);
                 const maxv = parseInt(prow.rows[0].max_population || 0, 10) + inc;
-                const avail = Math.max(0, maxv - cur);
-                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'poor', cur, maxv, avail);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityRow.id, 'poor', cur, maxv);
             } else {
-                await populationService.setPopulationForTypeWithClient(client, entityRow.id, 'poor', 0, inc, inc);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityRow.id, 'poor', 0, inc);
             }
         }
     } catch (e) {

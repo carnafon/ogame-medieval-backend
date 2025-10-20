@@ -182,6 +182,35 @@ async function setPopulationForTypeWithClient(client, entityId, type, currentPop
   );
 }
 
+/**
+ * Compute available_population for the given type using occupation derived from buildings
+ * and persist current_population, max_population and computed available_population using the provided client.
+ * This centralizes the logic of keeping current and available in sync when current changes.
+ */
+async function setPopulationForTypeComputedWithClient(client, entityId, type, currentPopulation, maxPopulation) {
+  // Reuse calculateAvailablePopulationWithClient to obtain occupation per type
+  const calc = await calculateAvailablePopulationWithClient(client, entityId);
+  const occ = (calc && calc.occupation && Number(calc.occupation[type]) ) ? Number(calc.occupation[type]) : 0;
+  const available = Math.max(0, Number(currentPopulation || 0) - occ);
+  await setPopulationForTypeWithClient(client, entityId, type, Number(currentPopulation || 0), Number(maxPopulation || 0), available);
+}
+
+// Non-client wrapper
+async function setPopulationForTypeComputed(entityId, type, currentPopulation, maxPopulation) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await setPopulationForTypeComputedWithClient(client, entityId, type, currentPopulation, maxPopulation);
+    await client.query('COMMIT');
+    return true;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (er) {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // --- New helpers for occupation/available calculation ---
 
 /**
@@ -319,4 +348,8 @@ module.exports = {
   calculateAvailablePopulation,
   calculateAvailablePopulationWithClient
 };
+
+// export computed setters
+module.exports.setPopulationForTypeComputedWithClient = setPopulationForTypeComputedWithClient;
+module.exports.setPopulationForTypeComputed = setPopulationForTypeComputed;
 

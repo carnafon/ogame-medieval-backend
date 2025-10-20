@@ -4,13 +4,13 @@
  */
 
 const pool = require('./db'); // Asume que db.js exporta la instancia del Pool
-const { runEconomicUpdate } = require('./jobs/ai_economic_engine');
+const { runBatch } = require('./jobs/ai_economic_engine_v2');
 
 async function main() {
     console.log("Iniciando tarea programada de actualización de IA...");
     try {
-        await runEconomicUpdate(pool);
-        console.log("Tarea de IA finalizada con éxito.");
+        await runBatch(pool, { maxCitiesPerTick: 40, concurrency: 6 });
+        console.log("Tarea de IA (v2) finalizada con éxito.");
     } catch (error) {
         console.error("Error al ejecutar la tarea de IA:", error);
     } finally {

@@ -519,20 +519,17 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
         const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'burgess');
         const cur = Number(prow.current || 0);
         const maxv = Number(prow.max || 0) + inc;
-        const avail = Math.max(0, maxv - cur);
-        await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
+        await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'burgess', cur, maxv);
       } else if (buildingId === 'casa_de_ladrillos') {
         const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'patrician');
         const cur = Number(prow.current || 0);
         const maxv = Number(prow.max || 0) + inc;
-        const avail = Math.max(0, maxv - cur);
-        await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
+        await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'patrician', cur, maxv);
       } else if (buildingId === 'house') {
         const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'poor');
         const cur = Number(prow.current || 0);
         const maxv = Number(prow.max || 0) + inc;
-        const avail = Math.max(0, maxv - cur);
-        await populationService.setPopulationForTypeWithClient(client, entityId, 'poor', cur, maxv, avail);
+        await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', cur, maxv);
       }
     } catch (e) {
       console.warn('[AI v2] Failed to update population bucket after building:', e && e.message);

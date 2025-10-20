@@ -8,8 +8,8 @@
 
 // Importar la librería de PostgreSQL. Asume que 'pg' está instalado.
 const { Pool } = require('pg'); 
-// Importar la lógica principal del motor económico.
-const { runEconomicUpdate } = require('./ai_economic_engine');
+// Importar la lógica principal del motor económico v2.
+const { runBatch } = require('./ai_economic_engine_v2');
 
 // --- CONFIGURACIÓN DEL POOL DE CONEXIÓN ---
 // Render automáticamente expone la URL de tu base de datos en las variables de entorno.
@@ -25,14 +25,12 @@ async function main() {
     console.log(`[CRON JOB] Iniciando tarea de actualización de IA en ${new Date().toISOString()}`);
     
     try {
-        // 1. Ejecutar el motor de la IA, pasándole el pool de conexión.
-        await runEconomicUpdate(pool);
-        
-        console.log("[CRON JOB] Tarea de IA finalizada con éxito.");
+        // 1. Ejecutar el motor de la IA v2, pasándole el pool de conexión.
+        await runBatch(pool, { maxCitiesPerTick: 40, concurrency: 6 });
+        console.log("[CRON JOB] Tarea de IA (v2) finalizada con éxito.");
     } catch (error) {
         console.error("[CRON JOB] ERROR CRÍTICO al ejecutar la tarea de IA:", error.message);
-        // Indicar al sistema que hubo un error
-        process.exit(1); 
+        process.exit(1);
     } finally {
         // 2. Cerrar la conexión para liberar recursos. Esto es CRÍTICO en un cron job.
         await pool.end();
