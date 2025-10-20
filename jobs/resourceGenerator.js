@@ -25,12 +25,12 @@ async function processEntity(entityId, options) {
         await client.query('BEGIN');
 
 
-                        // 🔹 Obtener datos base de la entidad mediante entityService (bloquea si forUpdate=true)
-                        const entityService = require('../utils/entityService');
-                        const entity = await entityService.getEntityById(client, entityId, true);
-                        if (!entity) {
-                                await client.query('ROLLBACK');
-                                return;
+      // 🔹 Obtener datos base de la entidad mediante entityService (bloquea si forUpdate=true)
+         const entityService = require('../utils/entityService');
+          const entity = await entityService.getEntityById(client, entityId, true);
+            if (!entity) {
+                    await client.query('ROLLBACK');
+                       return;
                         }
     // Obtener nombre de facción (no necesita lock)
     let faction_name = '';
@@ -342,7 +342,7 @@ async function runResourceGeneratorJob() {
     } catch (logAllErr) {
         console.warn('Failed to emit centralized resource delta logs:', logAllErr && logAllErr.message);
     }
-
+        console.log("WOLOLO");
         console.log("-> Generación de recursos completada.");
         return results;
     } catch (err) {
