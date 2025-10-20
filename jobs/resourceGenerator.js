@@ -20,6 +20,7 @@ const currentOptions = {
 // Función helper para procesar la lógica de recursos de un solo usuario
 async function processEntity(entityId, options) {
     const client = await pool.connect();
+    let resourceDeltas = null;
     try {
         await client.query('BEGIN');
 
@@ -239,12 +240,10 @@ async function processEntity(entityId, options) {
                     const diff = newV - oldV;
                     if (diff !== 0) deltas[k] = diff;
                 }
-                if (Object.keys(deltas).length > 0) {
-                    // Log format: entity id and map of resource -> delta (positive means added, negative means subtracted)
-                    console.log(`[RESOURCE_GEN] entity=${entityId} resource_deltas:`, deltas);
-                }
+                resourceDeltas = Object.keys(deltas).length > 0 ? deltas : null;
             } catch (logErr) {
-                console.warn('Failed to compute or log resource deltas for entity', entityId, logErr && logErr.message);
+                console.warn('Failed to compute resource deltas for entity', entityId, logErr && logErr.message);
+                resourceDeltas = null;
             }
 
             // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
@@ -322,12 +321,25 @@ async function processEntity(entityId, options) {
 async function runResourceGeneratorJob() {
     try {
         console.log("-> Iniciando cálculo de recursos para todos los jugadores.");
-    // Obtener lista de usuarios usando entityService
+        // Obtener lista de usuarios usando entityService
     const entityService = require('../utils/entityService');
     const ids = await entityService.listAllEntityIds(pool);
     // Usamos Promise.all para procesar los usuarios en paralelo y terminar más rápido.
     // Si tienes miles de usuarios, considera limitar la concurrencia (ej: a 100).
     const results = await Promise.all(ids.map(id => processEntity(id, currentOptions).catch(err => ({ error: err.message, entityId: id }))));
+
+    // Centralized logging of resource deltas produced/consumed per entity
+    try {
+        for (const r of results || []) {
+            if (!r) continue;
+            const entityIdLog = (r.entity && r.entity.id) || r.entityId || null;
+            if (r.resource_deltas && entityIdLog) {
+                console.log(`[RESOURCE_GEN] entity=${entityIdLog} resource_deltas:`, r.resource_deltas);
+            }
+        }
+    } catch (logAllErr) {
+        console.warn('Failed to emit centralized resource delta logs:', logAllErr && logAllErr.message);
+    }
 
         console.log("-> Generación de recursos completada.");
         return results;
