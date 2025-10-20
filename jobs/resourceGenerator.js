@@ -103,7 +103,6 @@ async function processEntity(entityId, options) {
             });
 
             // Load per-type population rows via populationService so logic is centralized
-            const populationService = require('../utils/populationService');
             const popMap = await populationService.getPopulationRowsWithClient(client, entityId);
 
             const tryConsumeForType = (typeKey, resourceKeys) => {
