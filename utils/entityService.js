@@ -1,5 +1,20 @@
 const pool = require('../db');
 
+// Cache whether entities.ai_runtime column exists in the database
+let _aiRuntimeExists = null;
+async function _hasAiRuntimeColumn(clientOrPool) {
+  if (_aiRuntimeExists !== null) return _aiRuntimeExists;
+  const client = (clientOrPool && clientOrPool.query && clientOrPool.release) ? clientOrPool : pool;
+  try {
+    const res = await client.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'entities' AND column_name = 'ai_runtime' LIMIT 1");
+    _aiRuntimeExists = res.rows.length > 0;
+  } catch (e) {
+    // If the metadata query fails, assume column doesn't exist to remain safe
+    _aiRuntimeExists = false;
+  }
+  return _aiRuntimeExists;
+}
+
 /**
  * Create an entity row and initialize its resource_inventory.
  * If a client (pg Client) is provided, uses it and expects caller to manage transactions.
@@ -56,12 +71,24 @@ async function createEntityWithResources(clientOrPool, data) {
 // Get entity by id. If forUpdate is true and a client is provided, use FOR UPDATE.
 async function getEntityById(clientOrPool, id, forUpdate = false) {
   const usingClient = !!(clientOrPool && clientOrPool.query && clientOrPool.release);
-  const q = forUpdate ? `SELECT e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord, e.ai_runtime FROM entities e WHERE e.id = $1 FOR UPDATE` : `SELECT e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord, e.ai_runtime FROM entities e WHERE e.id = $1`;
+  const client = usingClient ? clientOrPool : pool;
+
+  // Detect once whether ai_runtime column exists and include it only if present.
+  const hasAi = await _hasAiRuntimeColumn(client);
+  const selectCols = 'e.id, e.user_id, e.faction_id, e.type, e.x_coord, e.y_coord' + (hasAi ? ', e.ai_runtime' : '');
+  const q = forUpdate ? `SELECT ${selectCols} FROM entities e WHERE e.id = $1 FOR UPDATE` : `SELECT ${selectCols} FROM entities e WHERE e.id = $1`;
+
   if (usingClient) {
-    const res = await clientOrPool.query(q, [id]);
+    const res = await client.query(q, [id]);
+    // ensure ai_runtime key exists (fallback to {}) for callers
+    if (res.rows.length && hasAi && typeof res.rows[0].ai_runtime === 'undefined') res.rows[0].ai_runtime = {};
+    if (res.rows.length && !hasAi) res.rows[0].ai_runtime = {};
     return res.rows.length ? res.rows[0] : null;
   }
+
   const res = await pool.query(q, [id]);
+  if (res.rows.length && hasAi && typeof res.rows[0].ai_runtime === 'undefined') res.rows[0].ai_runtime = {};
+  if (res.rows.length && !hasAi) res.rows[0].ai_runtime = {};
   return res.rows.length ? res.rows[0] : null;
 }
 
