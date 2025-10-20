@@ -87,8 +87,8 @@ router.post('/market-price', async (req, res) => {
         continue;
       }
 
-      const stockAfter = action === 'buy' ? Math.max(0, mp.stockBefore - amount) : mp.stockBefore + amount;
-      results.push({ type, amount, action, base_price: mp.base, price: mp.price, stock_before: mp.stockBefore, stock_after });
+  const stockAfter = action === 'buy' ? Math.max(0, mp.stockBefore - amount) : mp.stockBefore + amount;
+  results.push({ type, amount, action, base_price: mp.base, price: mp.price, stock_before: mp.stockBefore, stock_after: stockAfter });
     }
 
     res.json({ results });
