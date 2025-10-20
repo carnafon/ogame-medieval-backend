@@ -98,38 +98,56 @@ router.post('/register', async (req, res) => {
           defaults[name] = typeof playerDefaults[name] === 'number' ? playerDefaults[name] : 0;
         }
 
-        const newEntity = await createEntityWithResources(pool, {
-          user_id: userId,
-          faction_id: factionId,
-          type: 'player',
-          x_coord: x,
-          y_coord: y,
-          population: BASE_POPULATION,
-          initialResources: defaults
-        });
+        let newEntity;
+        try {
+            newEntity = await createEntityWithResources(pool, {
+              user_id: userId,
+              faction_id: factionId,
+              type: 'player',
+              x_coord: x,
+              y_coord: y,
+              population: BASE_POPULATION,
+              initialResources: defaults
+            });
 
-    // 5️⃣ Crear ciudades IA para las demás facciones
-    try {
-      const factionsRes = await pool.query('SELECT id, name FROM factions WHERE id <> $1', [factionId]);
-      const aiCityService = require('../utils/ai_city_service');
-      for (const f of factionsRes.rows) {
-        // Find available coordinates for this faction
-        const { x: ax, y: ay } = await findAvailableCoordinates(pool, f.id);
-        // Create paired AI city with defaults (service will set population=100 and resources=1000)
-        await aiCityService.createPairedCity(pool, {
-          name: `IA ${f.name}`,
-          faction_id: f.id,
-          type: 'cityIA',
-          x_coord: ax,
-          y_coord: ay
-        });
-      }
-    } catch (aiErr) {
-      console.warn('Error creando ciudades IA al registrar usuario:', aiErr.message);
-    }
+            // 5️⃣ Crear ciudades IA para las demás facciones
+            try {
+              const factionsRes = await pool.query('SELECT id, name FROM factions WHERE id <> $1', [factionId]);
+              const aiCityService = require('../utils/ai_city_service');
+              for (const f of factionsRes.rows) {
+                // Find available coordinates for this faction
+                const { x: ax, y: ay } = await findAvailableCoordinates(pool, f.id);
+                // Create paired AI city with defaults
+                await aiCityService.createPairedCity(pool, {
+                  name: `IA ${f.name}`,
+                  faction_id: f.id,
+                  type: 'cityIA',
+                  x_coord: ax,
+                  y_coord: ay
+                });
+              }
+            } catch (aiErr) {
+              console.warn('Error creando ciudades IA al registrar usuario:', aiErr && aiErr.message ? aiErr.message : aiErr);
+            }
+        } catch (entityErr) {
+            // Cleanup: delete user to avoid orphaned users if entity creation fails
+            try {
+                await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+            } catch (delErr) {
+                console.error('Failed to cleanup user after entity creation failure:', delErr && delErr.message ? delErr.message : delErr);
+            }
+            console.error('Error creating entity during register:', entityErr && entityErr.message ? entityErr.message : entityErr);
+            return res.status(500).json({ message: 'Error creando la entidad del jugador durante el registro.', error: entityErr && entityErr.message ? entityErr.message : String(entityErr) });
+        }
 
   console.debug(`Nuevo usuario registrado: ${username} (ID: ${userId}) en las coordenadas (${x}, ${y})`);
-        const token = createToken(userId, username);
+        let token = null;
+        try {
+            token = createToken(userId, username);
+        } catch (tErr) {
+            console.warn('Warning: failed to create JWT token on register:', tErr && tErr.message ? tErr.message : tErr);
+            token = null;
+        }
 
     res.status(201).json({
       message: 'Registro exitoso.',
