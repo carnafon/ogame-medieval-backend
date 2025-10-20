@@ -109,7 +109,7 @@ router.post('/register', async (req, res) => {
       console.warn('Error creando ciudades IA al registrar usuario:', aiErr.message);
     }
 
-        console.log(`Nuevo usuario registrado: ${username} (ID: ${userId}) en las coordenadas (${x}, ${y})`);
+  console.debug(`Nuevo usuario registrado: ${username} (ID: ${userId}) en las coordenadas (${x}, ${y})`);
         const token = createToken(userId, username);
 
     res.status(201).json({

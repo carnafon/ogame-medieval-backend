@@ -1,7 +1,7 @@
 const pool = require('../db');
 
 async function main() {
-  console.log('Starting backfill of resource_inventory for all entities...');
+  console.debug('Starting backfill of resource_inventory for all entities...');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -17,7 +17,7 @@ async function main() {
     `;
     const res = await client.query(q);
     await client.query('COMMIT');
-    console.log('Backfill complete. Inserted rows:', res.rowCount);
+  console.debug('Backfill complete. Inserted rows:', res.rowCount);
     return res.rowCount;
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (e) {}

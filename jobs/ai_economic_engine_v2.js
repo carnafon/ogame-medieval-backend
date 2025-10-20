@@ -49,7 +49,7 @@ function resetMetrics() {
 
 function logEvent(event) {
   // Structured JSON log; keep compact
-  try { console.log('[AI v2][event] ' + JSON.stringify(event)); } catch (e) { console.log('[AI v2][event] (could not stringify)'); }
+  try { console.debug('[AI v2][event] ' + JSON.stringify(event)); } catch (e) { console.debug('[AI v2][event] (could not stringify)'); }
 }
 
 // Perception: snapshot of entity inventory, coords, and price_base map
@@ -555,7 +555,7 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
 
   // Probabilistic gate
   if (Math.random() > (opts.pAct || 0.4)) {
-    console.log(`[AI v2] Skipping city ${cityId} due to pAct`);
+    console.debug(`[AI v2] Skipping city ${cityId} due to pAct`);
     return { success: true, skipped: true };
   }
 
@@ -686,10 +686,10 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
 
 async function runBatch(pool, options = {}) {
   options = Object.assign({ maxCitiesPerTick: 40, concurrency: 6, runPercent: 0, maxNeighbors: DEFAULTS.MAX_NEIGHBORS }, options || {});
-  console.log('[AI v2] runBatch starting with options:', options);
+  console.debug('[AI v2] runBatch starting with options:', options);
   const rows = await aiCityService.listCities(pool, false);
   const candidates = (rows || []).slice(0, options.maxCitiesPerTick || 40);
-  console.log(`[AI v2] Candidate cities: ${candidates.length}`);
+  console.debug(`[AI v2] Candidate cities: ${candidates.length}`);
   const results = [];
   for (const c of candidates) {
     try {
@@ -709,7 +709,7 @@ async function runBatch(pool, options = {}) {
       results.push({ cityId: c.id, error: e && e.message });
     }
   }
-  console.log('[AI v2] runBatch finished');
+  console.debug('[AI v2] runBatch finished');
   // log metrics summary
   logEvent({ type: 'batch_summary', candidates: candidates.length, resultsCount: results.length, metrics: getMetrics() });
   return results;

@@ -78,7 +78,7 @@ function mapBuildingToPopulationBucket(buildingType) {
  */
 async function runEconomicUpdate(pool) {
     try {
-        console.log(`[AI Engine] Iniciando actualización económica de ciudades IA.`);
+    console.debug(`[AI Engine] Iniciando actualización económica de ciudades IA.`);
         // 1. Obtener todas las ciudades IA (lista mínima)
         const aiCities = await aiCityService.listCities(pool, false);
         const now = new Date();
@@ -88,12 +88,12 @@ async function runEconomicUpdate(pool) {
             const entRes = await pool.query('SELECT entity_id FROM ai_cities WHERE id = $1', [ai.id]);
             if (entRes.rows.length === 0 || !entRes.rows[0].entity_id) continue;
             const entityId = entRes.rows[0].entity_id;
-            console.log(`[AI Engine] --- Processing AI city id=${ai.id} -> entity=${entityId}`);
+            console.debug(`[AI Engine] --- Processing AI city id=${ai.id} -> entity=${entityId}`);
 
             const random = Math.random();
             //Sacamos un random para ver si procesamos esta ciudad o no. Si sale menos de 0.3, la procesamos.
             if (random < 0.3) {
-                console.log(`[AI Engine] Processing entity=${entityId} (random=${random.toFixed(3)})`);
+                console.debug(`[AI Engine] Processing entity=${entityId} (random=${random.toFixed(3)})`);
             const client = await pool.connect();
             try {
                 await client.query('BEGIN');
@@ -111,7 +111,7 @@ async function runEconomicUpdate(pool) {
                     const popStats = { current_population: popSummary.total || 0 };
                     const produced = calculateProductionForDuration(buildings, popStats, TICK_SECONDS);
                     if (produced && Object.keys(produced).length > 0) {
-                        console.log(`[AI Engine] entity=${entityId} produced (deltas):`, produced);
+                        console.debug(`[AI Engine] entity=${entityId} produced (deltas):`, produced);
                         // Lock resource rows and read current inventory via resourcesService
                         await resourcesService.lockResourceRowsWithClient(client, entityId);
                         const before = await resourcesService.getResourcesWithClient(client, entityId);
@@ -122,16 +122,16 @@ async function runEconomicUpdate(pool) {
                             const have = Number(before[key] || 0);
                             toWrite[key] = Math.max(0, have + delta);
                         });
-                        console.log(`[AI Engine] entity=${entityId} resource before:`, before, 'toWrite (after applying deltas):', toWrite);
+                        console.debug(`[AI Engine] entity=${entityId} resource before:`, before, 'toWrite (after applying deltas):', toWrite);
                         await resourcesService.setResourcesWithClientGeneric(client, entityId, toWrite);
                         // update the entities.last_resource_update timestamp so other systems can inspect it
                         const entityService = require('../utils/entityService');
                         await entityService.updateEntity(client, entityId, { last_resource_update: now.toISOString() });
                         // log after snapshot via resourcesService
                         const after = await resourcesService.getResourcesWithClient(client, entityId);
-                        console.log(`[AI Engine] entity=${entityId} resource after:`, after);
+                        console.debug(`[AI Engine] entity=${entityId} resource after:`, after);
                     } else {
-                        console.log(`[AI Engine] entity=${entityId} produced nothing this tick.`);
+                        console.debug(`[AI Engine] entity=${entityId} produced nothing this tick.`);
                     }
                 } catch (prodErr) {
                     console.warn('[AI Engine] Error processing production for entity', entityId, prodErr.message);
@@ -165,7 +165,7 @@ async function runEconomicUpdate(pool) {
                     }
 
                     // Fallback: choose the globally lowest-level building
-                    if (!bestUpgrade) {
+                        if (!bestUpgrade) {
                         const prodRatesAll = gameUtils.PRODUCTION_RATES || {};
                         for (const buildingId of Object.keys(BUILDING_COSTS)) {
                             const currentLevel = runtimeBuildings[buildingId] || 0;
@@ -187,9 +187,9 @@ async function runEconomicUpdate(pool) {
                     }
                     if (bestUpgrade) {
                         const lowestLevel = runtimeBuildings[bestUpgrade] || 0;
-                        console.log(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
+                        console.debug(`[AI Engine] entity=${entityId} considering building ${bestUpgrade} (current lvl ${lowestLevel})`);
                         const reqs = calculateUpgradeRequirementsFromConstants(bestUpgrade, lowestLevel);
-                        console.log(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
+                        console.debug(`[AI Engine] entity=${entityId} build reqs for ${bestUpgrade}:`, reqs);
                         if (reqs) {
                         // lock populations and compute availability using populationService
                         await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
@@ -233,7 +233,7 @@ async function runEconomicUpdate(pool) {
                                             reqs.currentPopRequirement = houseReqs.currentPopRequirement;
                                         } else {
                                             // cannot build house due to lack of resources, skip building
-                                            console.log(`[AI Engine] entity=${entityId} lacks resources to build ${bucketHouse} to expand capacity.`);
+                                            console.debug(`[AI Engine] entity=${entityId} lacks resources to build ${bucketHouse} to expand capacity.`);
                                             // exit build attempt
                                             // nothing to do here, AI will try other actions later
                                             // we just skip to next phase
@@ -309,7 +309,7 @@ async function runEconomicUpdate(pool) {
                                 const { incrementBuildingLevelWithClient } = require('../utils/buildingsService');
                                 await incrementBuildingLevelWithClient(client, entityId, bestUpgrade);
 
-                                console.log(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
+                                console.debug(`[AI Engine] entity ${entityId} built ${bestUpgrade} level ${lowestLevel + 1}`);
 
                                 // If house built, update population bucket max accordingly
                                     try {
@@ -379,7 +379,7 @@ async function runEconomicUpdate(pool) {
                     const y = coords.y_coord || 0;
 
                     const nearby = await findNearbyAICities(client, x, y, RADIUS, 8);
-                    console.log(`[AI Engine] entity=${entityId} found ${nearby.length} potential trade partners`);
+                    console.debug(`[AI Engine] entity=${entityId} found ${nearby.length} potential trade partners`);
                     if ((nearby || []).length > 0) {
                         const myResources = await resourcesService.getResourcesWithClient(client, entityId);
 
@@ -398,19 +398,19 @@ async function runEconomicUpdate(pool) {
                                 try {
                                         const nInv = await resourcesService.getResourcesWithClient(client, nb.id);
                                         const sellerStock = (nInv && nInv[resName]) || 0;
-                                    console.log(`[AI Engine] Trade attempt BUY: entity=${entityId} needs ${need} of ${resName}; seller=${nb.id} stock=${sellerStock}`);
+                                        console.debug(`[AI Engine] Trade attempt BUY: entity=${entityId} needs ${need} of ${resName}; seller=${nb.id} stock=${sellerStock}`);
                                         if (sellerStock <= SAFETY_STOCK) continue;
                                     const availableToSell = Math.min(need, Math.max(0, sellerStock - SAFETY_STOCK));
                                     if (availableToSell <= 0) continue;
                                     const mp = await marketService.computeMarketPriceSingle(client, resName, availableToSell, 'buy');
                                     if (!mp) {
-                                        console.log(`[AI Engine] computeMarketPriceSingle returned null for ${resName}`);
+                                        console.debug(`[AI Engine] computeMarketPriceSingle returned null for ${resName}`);
                                         continue;
                                     }
                                         const qty = Math.min(availableToSell, MAX_AMOUNT);
                                     try {
                                         await marketService.tradeWithClient(client, entityId, nb.id, resName, mp.price, qty);
-                                        console.log(`[AI Engine][Trade] entity ${entityId} bought ${qty} ${resName} from ${nb.id} at ${mp.price} each`);
+                                        console.debug(`[AI Engine][Trade] entity ${entityId} bought ${qty} ${resName} from ${nb.id} at ${mp.price} each`);
                                         tradesDone++;
                                     } catch (tradeErr) {
                                         console.warn(`[AI Engine] tradeWithClient failed (buy) entity=${entityId} seller=${nb.id} res=${resName}:`, tradeErr.message);
@@ -445,7 +445,7 @@ async function runEconomicUpdate(pool) {
                                     try {
                                         const nInv = await resourcesService.getResourcesWithClient(client, nb.id);
                                         const neighborAmt = (nInv && nInv[resName]) || 0;
-                                        console.log(`[AI Engine] Trade attempt SELL: entity=${entityId} has surplus=${surplus} of ${resName}; neighbor=${nb.id} amt=${neighborAmt}`);
+                                        console.debug(`[AI Engine] Trade attempt SELL: entity=${entityId} has surplus=${surplus} of ${resName}; neighbor=${nb.id} amt=${neighborAmt}`);
                                         if (neighborAmt >= buyLow) continue;
                                         const wanted = Math.min(MAX_AMOUNT, buyLow - neighborAmt);
                                         const toSell = Math.min(surplus, wanted);
@@ -455,12 +455,12 @@ async function runEconomicUpdate(pool) {
                                         // Only sell if market price is at or above base to ensure profitable sale
                                         const base = priceBaseMap[resName] || 1;
                                         if (mp.price < base) {
-                                            console.log(`[AI Engine] Skipping sale of ${resName} because market price ${mp.price} < base ${base}`);
+                                            console.debug(`[AI Engine] Skipping sale of ${resName} because market price ${mp.price} < base ${base}`);
                                             continue;
                                         }
                                         try {
                                             await marketService.tradeWithClient(client, nb.id, entityId, resName, mp.price, toSell);
-                                            console.log(`[AI Engine][Trade] entity ${entityId} sold ${toSell} ${resName} to ${nb.id} at ${mp.price} each`);
+                                            console.debug(`[AI Engine][Trade] entity ${entityId} sold ${toSell} ${resName} to ${nb.id} at ${mp.price} each`);
                                             tradesDone++;
                                         } catch (tradeErr) {
                                             console.warn(`[AI Engine] tradeWithClient failed (sell) entity=${entityId} buyer=${nb.id} res=${resName}:`, tradeErr.message);
@@ -471,7 +471,7 @@ async function runEconomicUpdate(pool) {
                                 }
                             }
                         }
-                        console.log(`[AI Engine] entity=${entityId} trading summary: tradesDone=${tradesDone}`);
+                        console.debug(`[AI Engine] entity=${entityId} trading summary: tradesDone=${tradesDone}`);
                     }
                 } catch (tradeErr) {
                     console.warn('[AI Engine] Error during trading phase for entity', entityId, tradeErr.message);
@@ -487,7 +487,7 @@ async function runEconomicUpdate(pool) {
         }
     }
 
-        console.log(`[AI Engine] Actualización económica finalizada con éxito.`);
+    console.debug(`[AI Engine] Actualización económica finalizada con éxito.`);
     } catch (err) {
         console.error('[AI Engine] Error crítico en runEconomicUpdate:', err.message);
     }
@@ -608,7 +608,7 @@ async function completeConstruction(client, ai, entityRow) {
         console.warn('[AI Engine] Failed to update populations on construction complete:', e.message);
     }
 
-    console.log(`[AI Engine] ✅ Construcción finalizada en entity ${entityRow.id}: ${building_id} Nivel ${level_to_upgrade}.`);
+    console.debug(`[AI Engine] ✅ Construcción finalizada en entity ${entityRow.id}: ${building_id} Nivel ${level_to_upgrade}.`);
 }
 
 
@@ -655,7 +655,7 @@ async function decideNewConstruction(client, ai, entityRow) {
         if (atCapacity) {
             // Try building a house to expand capacity
             const bucketHouse = targetBucket === 'poor' ? 'house' : (targetBucket === 'burgess' ? 'casa_de_piedra' : 'casa_de_ladrillos');
-            console.log(`[AI Engine] entity=${entityRow.id} at capacity on ${targetBucket}, will try to schedule ${bucketHouse} instead of ${bestUpgrade}`);
+            console.debug(`[AI Engine] entity=${entityRow.id} at capacity on ${targetBucket}, will try to schedule ${bucketHouse} instead of ${bestUpgrade}`);
             const houseLevel = (runtime.buildings && runtime.buildings[bucketHouse]) || 0;
             const houseReqs = calculateUpgradeRequirementsFromConstants(bucketHouse, houseLevel);
             if (houseReqs) {
@@ -676,14 +676,14 @@ async function decideNewConstruction(client, ai, entityRow) {
                     reqs.popForNextLevel = houseReqs.popForNextLevel;
                     reqs.currentPopRequirement = houseReqs.currentPopRequirement;
                 } else {
-                    console.log(`[AI Engine] entity=${entityRow.id} lacks resources to build ${bucketHouse} to expand capacity.`);
+                    console.debug(`[AI Engine] entity=${entityRow.id} lacks resources to build ${bucketHouse} to expand capacity.`);
                     return;
                 }
             } else {
                 return;
             }
         } else {
-            console.log(`[AI Engine] ⚠️ entity ${entityRow.id} necesita más población para mejorar ${bestUpgrade}.`);
+            console.debug(`[AI Engine] ⚠️ entity ${entityRow.id} necesita más población para mejorar ${bestUpgrade}.`);
             return;
         }
     }
@@ -700,7 +700,7 @@ async function decideNewConstruction(client, ai, entityRow) {
     }
 
     if (!hasEnough) {
-        console.log(`[AI Engine] ❌ entity ${entityRow.id} no tiene recursos suficientes para ${bestUpgrade}.`);
+    console.debug(`[AI Engine] ❌ entity ${entityRow.id} no tiene recursos suficientes para ${bestUpgrade}.`);
         return;
     }
 
@@ -730,7 +730,7 @@ async function decideNewConstruction(client, ai, entityRow) {
     const entityService = require('../utils/entityService');
     await entityService.updateEntity(client, entityRow.id, { ai_runtime: newRuntime });
 
-    console.log(`[AI Engine] 🛠️ entity ${entityRow.id} inició construcción ${bestUpgrade} Nivel ${reqs.nextLevel}.`);
+    console.debug(`[AI Engine] 🛠️ entity ${entityRow.id} inició construcción ${bestUpgrade} Nivel ${reqs.nextLevel}.`);
 }
 
 

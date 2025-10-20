@@ -22,12 +22,12 @@ const pool = new Pool({
 
 // --- FUNCIÓN PRINCIPAL DE EJECUCIÓN ---
 async function main() {
-    console.log(`[CRON JOB] Iniciando tarea de actualización de IA en ${new Date().toISOString()}`);
+    console.debug(`[CRON JOB] Iniciando tarea de actualización de IA en ${new Date().toISOString()}`);
     
     try {
         // 1. Ejecutar el motor de la IA v2, pasándole el pool de conexión.
         await runBatch(pool, { maxCitiesPerTick: 40, concurrency: 6 });
-        console.log("[CRON JOB] Tarea de IA (v2) finalizada con éxito.");
+    console.debug("[CRON JOB] Tarea de IA (v2) finalizada con éxito.");
     } catch (error) {
         console.error("[CRON JOB] ERROR CRÍTICO al ejecutar la tarea de IA:", error.message);
         process.exit(1);

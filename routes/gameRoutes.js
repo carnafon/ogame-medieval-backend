@@ -25,8 +25,8 @@ router.post('/build', async (req, res) => {
     
     const userId = req.user.id; 
     const { buildingType,entity } = req.body; 
-    console.log(`build request from user ${userId}:`, req.body);
-    console.log(`Entity : ${entity.id}, Building Type: ${buildingType}`);
+    console.debug(`build request from user ${userId}:`, req.body);
+    console.debug(`Entity : ${entity.id}, Building Type: ${buildingType}`);
 
     const costBase = BUILDING_COSTS[buildingType];
     if (!costBase) {
@@ -107,14 +107,14 @@ router.post('/build', async (req, res) => {
         // Consume resources within this same transaction
         try {
             // Debug: log current resources before attempting to consume
-            try {
-                // Read current resources via resourcesService for logging
-                const resourcesService = require('../utils/resourcesService');
-                const curObj = await resourcesService.getResourcesWithClient(client, entity.id);
-                console.log(`Current resources for entity ${entity.id}:`, curObj);
-            } catch (logErr) {
-                console.warn('Failed to read current resources for logging:', logErr.message);
-            }
+                try {
+                    // Read current resources via resourcesService for debug only
+                    const resourcesService = require('../utils/resourcesService');
+                    const curObj = await resourcesService.getResourcesWithClient(client, entity.id);
+                    console.debug(`Current resources for entity ${entity.id}:`, curObj);
+                } catch (logErr) {
+                    console.warn('Failed to read current resources for logging:', logErr.message);
+                }
             // Use generic consume when building cost uses arbitrary resource keys
             const resourcesService = require('../utils/resourcesService');
             // Map cost object to include only keys with positive amounts

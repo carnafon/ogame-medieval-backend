@@ -7,10 +7,10 @@ const pool = require('./db'); // Asume que db.js exporta la instancia del Pool
 const { runBatch } = require('./jobs/ai_economic_engine_v2');
 
 async function main() {
-    console.log("Iniciando tarea programada de actualización de IA...");
+    console.debug("Iniciando tarea programada de actualización de IA...");
     try {
         await runBatch(pool, { maxCitiesPerTick: 40, concurrency: 6 });
-        console.log("Tarea de IA (v2) finalizada con éxito.");
+    console.debug("Tarea de IA (v2) finalizada con éxito.");
     } catch (error) {
         console.error("Error al ejecutar la tarea de IA:", error);
     } finally {
@@ -22,6 +22,6 @@ async function main() {
 // Ejecutar el script
 // Debes configurarlo para que se ejecute cada X minutos (e.g., usando node-cron o un cron job del sistema)
 // main(); 
-// console.log("¡El motor AI está listo para ser activado por tu CRON job!");
+// informational: AI engine ready to be invoked by your cron job
 
 module.exports = { main }; // Exportar si usas un orquestador de jobs

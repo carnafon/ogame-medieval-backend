@@ -23,7 +23,7 @@ pool.connect()
     .then((client) => {
         // Immediately release the client to avoid holding onto a checked-out client.
         try { client.release(); } catch (e) { /* ignore */ }
-        console.log('✅ Conectado a la base de datos de Neon.');
+    console.debug('✅ Conectado a la base de datos de Neon.');
         // ❌ Importante: Hemos eliminado el código que llamaba a startResourceGenerator,
         // ya que ahora la tarea se ejecutará solo bajo demanda del Web-Cron.
     })
@@ -46,7 +46,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
     }
     
         // 2. Ejecutar la Tarea
-        console.log(`[WEB-CRON] Iniciando tarea de generación de recursos a las ${new Date().toISOString()}`);
+    console.debug(`[WEB-CRON] Iniciando tarea de generación de recursos a las ${new Date().toISOString()}`);
         try {
             // La función runResourceGeneratorJob (del archivo jobs/resourceGenerator.js)
             // se encargará de toda la lógica de cálculo de recursos para los jugadores.
@@ -83,7 +83,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
 
                 // Decide whether to attempt v2
                 const roll = Math.random() * 100;
-                console.log('[WEB-CRON] AI selection: preferred=%s v2Percent=%s roll=%s', preferred, v2Percent, roll.toFixed(2));
+                console.debug('[WEB-CRON] AI selection: preferred=%s v2Percent=%s roll=%s', preferred, v2Percent, roll.toFixed(2));
 
                 const shouldConsiderV2 = (() => {
                     if (preferred === '2') return true;
@@ -97,7 +97,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
 
                 if (shouldConsiderV2) {
                     try {
-                        console.log('[WEB-CRON] Attempting to run AI engine v2 (canary)');
+                        console.debug('[WEB-CRON] Attempting to run AI engine v2 (canary)');
                         // Check module presence early for clearer logs
                         let ai2;
                         try {
@@ -113,7 +113,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
 
                         await promiseWithTimeout(tryRunV2(), AI_TIMEOUT_MS);
                         usedV2 = true;
-                        console.log('[WEB-CRON] AI v2 finished successfully');
+                        console.debug('[WEB-CRON] AI v2 finished successfully');
                     } catch (err) {
                         // err may be module missing, timeout, or runtime error; log reason
                         const msg = err && err.message ? err.message : String(err);
@@ -122,11 +122,11 @@ app.post('/api/run-scheduled-job', async (req, res) => {
                         // fallback to v1 below
                     }
                 } else {
-                    console.log('[WEB-CRON] Skipping AI v2 - reason:', v2SkipReason);
+                    console.debug('[WEB-CRON] Skipping AI v2 - reason:', v2SkipReason);
                 }
 
                 if (!usedV2) {
-                    console.log('[WEB-CRON] Skipping AI engine run because v2 was not selected or failed. v1 has been removed.');
+                    console.debug('[WEB-CRON] Skipping AI engine run because v2 was not selected or failed. v1 has been removed.');
                 }
 
             } catch (aiErr) {
@@ -134,7 +134,7 @@ app.post('/api/run-scheduled-job', async (req, res) => {
                 console.error('[WEB-CRON] Error ejecutando AI economic engine:', aiErr && aiErr.stack ? aiErr.stack : aiErr);
             }
 
-            console.log('[WEB-CRON] Tarea finalizada con éxito.');
+            console.debug('[WEB-CRON] Tarea finalizada con éxito.');
             // 3. Responder al servicio Web-Cron (ej. Cron-Job.org)
             res.status(200).json({ message: 'Tarea de generación de recursos y AI ejecutada.' });
 
@@ -184,5 +184,5 @@ app.use('/api/population', populationRoutes);
 
 
 app.listen(port, () => {
-    console.log(`Servidor escuchando en el puerto ${port}`);
+    console.debug(`Servidor escuchando en el puerto ${port}`);
 });

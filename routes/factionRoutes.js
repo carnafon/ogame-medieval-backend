@@ -5,16 +5,16 @@ const pool = require('../db');
 // 📦 GET /api/factions
 router.get('/', async (req, res) => {
   const start = Date.now();
-  console.log(`[factionRoutes] GET /api/factions from ${req.ip} - headers: ${JSON.stringify({ host: req.headers.host, origin: req.headers.origin })}`);
+  console.debug(`[factionRoutes] GET /api/factions from ${req.ip} - headers: ${JSON.stringify({ host: req.headers.host, origin: req.headers.origin })}`);
   try {
-    console.log('[factionRoutes] About to run DB query. Pool status:', { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount });
+  console.debug('[factionRoutes] About to run DB query. Pool status:', { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount });
     // Wrap the DB query with a timeout so we can detect hangs
     const qPromise = pool.query('SELECT id, name FROM factions ORDER BY id');
     const timeoutMs = 7000;
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('DB_QUERY_TIMEOUT')), timeoutMs));
     const result = await Promise.race([qPromise, timeoutPromise]);
     const duration = Date.now() - start;
-    console.log(`[factionRoutes] DB returned ${result.rows.length} factions in ${duration}ms`);
+  console.debug(`[factionRoutes] DB returned ${result.rows.length} factions in ${duration}ms`);
     res.json(result.rows);
   } catch (error) {
     const duration = Date.now() - start;
