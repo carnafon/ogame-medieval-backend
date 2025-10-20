@@ -69,7 +69,7 @@ async function processEntity(entityId, options) {
     const popSummary = { total: popCalc.total, max: popCalc.max, breakdown: popCalc.breakdown, available: popCalc.available };
     const occupation = popCalc.occupation;
     const popStats = calculatePopulationStats(buildings, parseInt(popSummary.total, 10));
-    const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed);
+    const accrued = calculateProductionForDuration(buildings, popStats, secondsElapsed, faction_name);
     const maxPopulation = popStats.max_population || entity.max_population || 0;
 
         // Aplicar sumas fijas por tick configurables
@@ -239,7 +239,7 @@ async function processEntity(entityId, options) {
     // Ajuste de población escalado por número de ticks pasados
     let newPopulation = popStats.current_population;
         if (ticks > 0) {
-            const perTickProduction = calculateProduction(buildings, popStats);
+            const perTickProduction = calculateProduction(buildings, popStats, faction_name);
             if ((perTickProduction.food || 0) >= 0) {
                 newPopulation = Math.min(maxPopulation, newPopulation + POPULATION_CHANGE_RATE * ticks);
             } else {

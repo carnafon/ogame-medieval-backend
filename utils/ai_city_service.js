@@ -1,7 +1,7 @@
 /**
  * ai_city_service.js
- * Helper utilities to manage AI cities (ai_cities table).
- * Provides CRUD-like functions and helpers to lock and update rows inside transactions.
+ * Utilidades auxiliares para gestionar ciudades IA (tabla ai_cities).
+ * Provee funciones tipo CRUD y ayudantes para bloquear y actualizar filas dentro de transacciones.
  */
 
 const pool = require('../db');
@@ -30,7 +30,7 @@ async function createCity(clientOrPool, cityData) {
  * Returns { entity, ai_city }
  */
 async function createPairedCity(clientOrPool, cityData) {
-    // We'll open/require a client if a pool was provided
+    // Abrimos/obtenemos un cliente si se proporcionó un pool
     const usingClient = !!(clientOrPool && clientOrPool.query && clientOrPool.release);
     if (!usingClient) {
         // Use a new client transaction
@@ -59,7 +59,7 @@ async function createPairedCity(clientOrPool, cityData) {
         rtRes.rows.forEach(r => { initialResources[(r.name || '').toLowerCase()] = 1000; });
     }
 
-    // 1. create entity row using shared service
+    // 1. crear la fila de entidad usando el servicio compartido
     const entityService = require('./entityService');
     const entity = await entityService.createEntityWithResources(client, {
         user_id: cityData.user_id || null,
@@ -71,11 +71,11 @@ async function createPairedCity(clientOrPool, cityData) {
         initialResources
     });
 
-    // 2. create ai_cities row and attach to entity
+    // 2. crear la fila en ai_cities y vincularla a la entidad
     const ai = await createCity(client, { name: cityData.name || `IA City ${entity.id}` });
     await client.query('UPDATE ai_cities SET entity_id = $1 WHERE id = $2', [entity.id, ai.id]);
 
-    // 2b. Ensure resource_inventory is set to the desired initialResources (defensive)
+    // 2b. Asegurarse de que resource_inventory está configurado con los initialResources deseados (defensivo)
     try {
         const resourcesService = require('./resourcesService');
         await resourcesService.setResourcesWithClientGeneric(client, entity.id, initialResources);
@@ -84,8 +84,8 @@ async function createPairedCity(clientOrPool, cityData) {
         console.warn('Failed to initialize AI city resources in resource_inventory:', rsErr.message);
     }
 
-    // Additional defensive upsert: ensure a resource_inventory row exists for every resource type.
-    // This protects against cases where the shared entity creator didn't insert rows (e.g. schema mismatch).
+    // Upsert defensivo adicional: garantizar que existe una fila en resource_inventory para cada tipo de recurso.
+    // Protege contra casos donde el creador de entidades compartido no insertó filas (por ejemplo, desajuste de esquema).
     try {
         const rt = await client.query('SELECT id, name FROM resource_types');
         for (const r of rt.rows) {
@@ -103,9 +103,9 @@ async function createPairedCity(clientOrPool, cityData) {
         console.warn('Failed to upsert resource_inventory defensive rows for AI city:', upErr.message);
     }
 
-    // Do NOT store runtime in entities.ai_runtime for AI cities.
-    // Resource amounts are already initialized in resource_inventory by createEntityWithResources.
-    // Buildings are persisted in the `buildings` table when the AI builds.
+    // NO almacenar runtime en entities.ai_runtime para ciudades IA.
+    // Las cantidades de recursos ya se inicializan en resource_inventory por createEntityWithResources.
+    // Los edificios se persisten en la tabla `buildings` cuando la IA construye.
 
     return { entity, ai_city: ai };
 }

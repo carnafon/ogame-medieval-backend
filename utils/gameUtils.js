@@ -211,7 +211,7 @@ const calculatePopulationStats = (userBuildings, currentPopFromDB) => {
  * @param {{current_population: number}} populationStats Estadísticas de población.
  * @returns {{wood: number, stone: number, food: number}}
  */
-const calculateProduction = (userBuildings, populationStats) => {
+const calculateProduction = (userBuildings, populationStats, factionBonusesOrName) => {
     // Producción por recurso (dinámico según claves en PRODUCTION_RATES)
     const production = {};
 
@@ -236,6 +236,25 @@ const calculateProduction = (userBuildings, populationStats) => {
     const foodConsumption = (populationStats.current_population || 0) * -FOOD_CONSUMPTION_PER_CITIZEN;
     production.food = (production.food || 0) + foodConsumption;
 
+    // Apply faction multipliers if provided. factionBonusesOrName can be an object map or a faction name string.
+    try {
+        let multipliers = {};
+        if (typeof factionBonusesOrName === 'string') {
+            const fb = require('../constants/factionBonuses').FACTION_BONUSES || {};
+            multipliers = fb[factionBonusesOrName] || fb['Default'] || {};
+        } else if (typeof factionBonusesOrName === 'object' && factionBonusesOrName !== null) {
+            multipliers = factionBonusesOrName;
+        }
+        if (multipliers && Object.keys(multipliers).length > 0) {
+            Object.keys(multipliers).forEach(rk => {
+                const mul = Number(multipliers[rk]) || 1;
+                production[rk] = (production[rk] || 0) * mul;
+            });
+        }
+    } catch (e) {
+        // ignore failures applying faction bonuses
+    }
+
     return production;
 };
 
@@ -249,11 +268,11 @@ const calculateProduction = (userBuildings, populationStats) => {
  * @param {number} seconds
  * @returns {{wood:number,stone:number,food:number}}
  */
-const calculateProductionForDuration = (userBuildings, populationStats, seconds) => {
+const calculateProductionForDuration = (userBuildings, populationStats, seconds, factionBonusesOrName) => {
     if (seconds <= 0) return { wood: 0, stone: 0, food: 0 };
 
     // Producción por tick (la función calculateProduction devuelve producción por tick)
-    const perTick = calculateProduction(userBuildings, populationStats);
+    const perTick = calculateProduction(userBuildings, populationStats, factionBonusesOrName);
     const multiplier = seconds / TICK_SECONDS;
 
     const scaled = {};
