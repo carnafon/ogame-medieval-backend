@@ -79,13 +79,13 @@ async function createPairedCity(clientOrPool, cityData) {
 
     // 1. crear la fila de entidad usando el servicio compartido
     const entityService = require('./entityService');
-    const entity = await entityService.createEntityWithResources(client, {
+        const entity = await entityService.createEntityWithResources(client, {
         user_id: cityData.user_id || null,
         faction_id: cityData.faction_id || null,
         type: cityData.type || 'cityIA',
         x_coord: cityData.x_coord || 0,
         y_coord: cityData.y_coord || 0,
-        population: cityData.population || 100,
+        population: cityData.population || 1,
         initialResources
     });
 

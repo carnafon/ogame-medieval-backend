@@ -420,7 +420,15 @@ async function buildPlanner(perception, pool, opts = {}) {
       perTypeMax = null;
     }
 
-    const hasCapacity = (perTypeMax === null) || (perTypeCurrent < perTypeMax) || buildingId.startsWith('house') || buildingId === 'house';
+  // Determine if there is capacity for population this building may require.
+  // If popNeeded is specified in BUILDING_COSTS we must ensure there's room for that many new population units
+  // unless the building is a house (which increases capacity instead of consuming it).
+  const popNeeded = (reqs && reqs.popForNextLevel) ? Number(reqs.popForNextLevel || 0) : 0;
+  const isHouseType = buildingId === 'house' || buildingId.startsWith('casa') || buildingId.startsWith('house');
+  const hasCapacity = (perTypeMax === null) || (perTypeCurrent < perTypeMax) || isHouseType;
+  // Also mark whether available population slots are sufficient for popNeeded (if popNeeded > 0)
+  const availableSlots = (perTypeMax === null) ? Infinity : Math.max(0, perTypeMax - perTypeCurrent);
+  const hasEnoughPopSlots = isHouseType ? true : (availableSlots >= popNeeded);
     // which resources does this building produce (positive rate)
     const produces = Object.keys(rates || {}).filter(k => (Number(rates[k]) || 0) > 0);
     // primary produced resource (highest weighted by price)
@@ -433,23 +441,31 @@ async function buildPlanner(perception, pool, opts = {}) {
       })[0] || null;
     } catch(e) { primaryProduce = produces[0] || null; }
 
-    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, produces, primaryProduce, priorityBoost });
+    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, hasEnoughPopSlots, produces, primaryProduce, priorityBoost });
   }
 
+  // Filter out candidates that explicitly require population slots we don't have (unless they are house types)
+  const filteredCandidates = candidates.filter(c => {
+    const isHouseTypeLocal = c.buildingId === 'house' || c.buildingId.startsWith('casa') || c.buildingId.startsWith('house');
+    if (isHouseTypeLocal) return true;
+    if (typeof c.hasEnoughPopSlots === 'boolean' && !c.hasEnoughPopSlots) return false;
+    return true;
+  });
+
   // prefer candidates with hasCapacity true and lower payback
-  candidates.sort((a, b) => {
+  filteredCandidates.sort((a, b) => {
     if (a.hasCapacity !== b.hasCapacity) return a.hasCapacity ? -1 : 1;
     if ((b.priorityBoost || 0) !== (a.priorityBoost || 0)) return (b.priorityBoost || 0) - (a.priorityBoost || 0);
     return a.payback - b.payback;
   });
 
-  if (!candidates || candidates.length === 0) {
+  if (!filteredCandidates || filteredCandidates.length === 0) {
     logEvent({ type: 'build_planner_no_candidates', entityId, reason: 'no_viable_candidates', priceBaseMap });
   } else {
-    logEvent({ type: 'build_planner_candidates', entityId, count: candidates.length, top: candidates[0] });
+    logEvent({ type: 'build_planner_candidates', entityId, count: filteredCandidates.length, top: filteredCandidates[0] });
   }
 
-  return candidates;
+  return filteredCandidates;
 }
 
 // Execute build action atomically: deduct resources, persist building level, and update populations for houses
@@ -479,17 +495,25 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
 
     // population check: ensure per-type current < max unless building is a house
     const bucket = mapBuildingToPopulationBucket(buildingId);
-    if (!(buildingId === 'house' || buildingId.startsWith('casa') || buildingId.startsWith('house'))) {
-      // Use populationService to lock/obtain the per-type row and check capacity
-      const popRow = await populationService.getPopulationByTypeWithClient(client, entityId, bucket);
-      if (popRow) {
-        const cur = Number(popRow.current || 0);
-        const maxv = Number(popRow.max || 0);
-        if (cur >= maxv) {
-          logEvent({ type: 'build_failed_population_capacity', entityId, buildingId, bucket, current: cur, max: maxv });
-          await client.query('ROLLBACK');
-          return { success: false, reason: 'population_capacity', bucket, current: cur, max: maxv };
-        }
+    // Use populationService to lock/obtain the per-type row and check capacity
+    const popRow = await populationService.getPopulationByTypeWithClient(client, entityId, bucket);
+    if (popRow) {
+      const cur = Number(popRow.current || 0);
+      const maxv = Number(popRow.max || 0);
+      const popNeededForThisBuild = (reqs && typeof reqs.popForNextLevel === 'number') ? Number(reqs.popForNextLevel) : 0;
+      const isHouseTypeLocal = buildingId === 'house' || buildingId.startsWith('casa') || buildingId.startsWith('house');
+      // If building consumes population (popNeededForThisBuild > 0) ensure there are enough available slots
+      const available = Math.max(0, maxv - cur);
+      if (!isHouseTypeLocal && popNeededForThisBuild > 0 && available < popNeededForThisBuild) {
+        logEvent({ type: 'build_failed_population_insufficient_slots', entityId, buildingId, bucket, current: cur, max: maxv, popNeeded: popNeededForThisBuild, available });
+        await client.query('ROLLBACK');
+        return { success: false, reason: 'population_insufficient_slots', bucket, current: cur, max: maxv, popNeeded: popNeededForThisBuild, available };
+      }
+      // Also enforce that current < max for non-house types as before
+      if (!isHouseTypeLocal && cur >= maxv) {
+        logEvent({ type: 'build_failed_population_capacity', entityId, buildingId, bucket, current: cur, max: maxv });
+        await client.query('ROLLBACK');
+        return { success: false, reason: 'population_capacity', bucket, current: cur, max: maxv };
       }
     }
 

@@ -10,7 +10,7 @@ const { getResources } = require('../utils/resourcesService');
 const { getBuildings } = require('../utils/buildingsService');
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const BASE_POPULATION = 10; 
+const BASE_POPULATION = 1;
 
 // Función auxiliar para crear el token
 const createToken = (userId, username) => {
