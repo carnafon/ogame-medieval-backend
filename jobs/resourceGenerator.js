@@ -239,17 +239,28 @@ async function processEntity(entityId, options) {
             // Compute deltas (new - old) and log added/subtracted resources per entity
             try {
                 const deltas = {};
+                const produced = {};
+                const consumed = {};
                 const allKeys = new Set([...(Object.keys(currentResources || {})), ...(Object.keys(newResources || {}))]);
                 for (const k of allKeys) {
                     const oldV = Number(currentResources && currentResources[k] ? currentResources[k] : 0);
                     const newV = Number(newResources && newResources[k] ? newResources[k] : 0);
                     const diff = newV - oldV;
-                    if (diff !== 0) deltas[k] = diff;
+                    if (diff !== 0) {
+                        deltas[k] = diff;
+                        if (diff > 0) produced[k] = diff;
+                        else consumed[k] = Math.abs(diff);
+                    }
                 }
                 resourceDeltas = Object.keys(deltas).length > 0 ? deltas : null;
+                // also expose produced/consumed separately for clearer logs
+                resourceProduced = Object.keys(produced).length > 0 ? produced : null;
+                resourceConsumed = Object.keys(consumed).length > 0 ? consumed : null;
             } catch (logErr) {
                 console.warn('Failed to compute resource deltas for entity', entityId, logErr && logErr.message);
                 resourceDeltas = null;
+                resourceProduced = null;
+                resourceConsumed = null;
             }
 
             // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
@@ -311,7 +322,9 @@ async function processEntity(entityId, options) {
                 available_population: Math.max(0, newPopulation - occupation)
             },
             // Provide resource deltas for centralized logging in runResourceGeneratorJob
-            resource_deltas: resourceDeltas
+            resource_deltas: resourceDeltas,
+            resource_produced: typeof resourceProduced !== 'undefined' ? resourceProduced : null,
+            resource_consumed: typeof resourceConsumed !== 'undefined' ? resourceConsumed : null
         };
     } catch (err) {
         try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
@@ -341,10 +354,10 @@ async function runResourceGeneratorJob() {
         for (const r of results || []) {
             if (!r) continue;
             const entityIdLog = (r.entity && r.entity.id) || r.entityId || null;
-            if (r.resource_deltas && entityIdLog) {
-                console.log(`[RESOURCE_GEN] entity=${entityIdLog} resource_deltas:`, r.resource_deltas);
+            if (entityIdLog) {
+                if (r.resource_produced) console.log(`[RESOURCE_GEN] entity=${entityIdLog} produced:`, r.resource_produced);
+                if (r.resource_consumed) console.log(`[RESOURCE_GEN] entity=${entityIdLog} consumed:`, r.resource_consumed);
             }
-             console.log(`[RESOURCE_GEN] 2 entity=${entityIdLog} resource_deltas:`, r.resource_deltas);
         }
     } catch (logAllErr) {
         console.warn('Failed to emit centralized resource delta logs:', logAllErr && logAllErr.message);
