@@ -606,8 +606,34 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
   }
 
   const acted = execResults.some(r => r.success || (r.result && r.result.success));
-  logEvent({ type: 'city_tick_summary', entityId: cityId, acted, results: execResults });
-  return { success: true, cityId, acted, results: execResults };
+  // Compute wood production and consumption per minute for logging
+  let woodProducedPerMinute = null;
+  let woodConsumedPerMinute = null;
+  try {
+    const buildingRows = await getBuildings(cityId);
+    // sum current population across buckets
+    let totalPop = 0;
+    try {
+      const popRows = await populationService.getPopulationRowsWithClient(pool, cityId);
+      for (const k of Object.keys(popRows || {})) {
+        totalPop += Number(popRows[k].current || 0);
+      }
+    } catch (e) {
+      totalPop = 0;
+    }
+    const prodPerTick = gameUtils.calculateProduction(buildingRows, { current_population: totalPop }) || {};
+    const woodPerTick = Number(prodPerTick.wood || 0);
+    const factor = 60 / (gameUtils.TICK_SECONDS || 60);
+    woodProducedPerMinute = Math.max(0, woodPerTick) * factor;
+    woodConsumedPerMinute = Math.max(0, -woodPerTick) * factor;
+  } catch (e) {
+    // leave null on failure
+    woodProducedPerMinute = null;
+    woodConsumedPerMinute = null;
+  }
+
+  logEvent({ type: 'city_tick_summary', entityId: cityId, acted, results: execResults, wood_produced_per_minute: woodProducedPerMinute, wood_consumed_per_minute: woodConsumedPerMinute });
+  return { success: true, cityId, acted, results: execResults, wood_produced_per_minute: woodProducedPerMinute, wood_consumed_per_minute: woodConsumedPerMinute };
 }
 
 async function runBatch(pool, options = {}) {
