@@ -16,6 +16,22 @@ const POPULATION_CHANGE_RATE = 1;
 const { BUILDING_COSTS } = require('../constants/buildings');
 const { ALLOWED_BUILDINGS_BY_FACTION } = require('../constants/buildingFactions');
 
+// Expose game constants to frontend for UI consistency
+router.get('/game/constants', async (req, res) => {
+    try {
+        const gu = require('../utils/gameUtils');
+        return res.status(200).json({
+            productionRates: gu.PRODUCTION_RATES,
+            processingRecipes: gu.PROCESSING_RECIPES,
+            resourceCategories: gu.RESOURCE_CATEGORIES,
+            buildingCosts: BUILDING_COSTS
+        });
+    } catch (err) {
+        console.error('Failed to return game constants:', err.message);
+        return res.status(500).json({ message: 'Error al obtener constantes del juego.' });
+    }
+});
+
 // -----------------------------------------------------------------
 // ⭐️ RUTAS PROTEGIDAS (authenticateToken se ejecuta en index.js)
 // -----------------------------------------------------------------
