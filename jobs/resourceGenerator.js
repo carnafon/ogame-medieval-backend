@@ -115,6 +115,7 @@ async function processEntity(entityId, options) {
                     if (max > 0 && haveNEach(1)) {
                         // Consume 1 of each and create 1 population
                         resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                        console.log('SIU aumentamos');
                         return { newCurrent: 1, max };
                     }
                     return { newCurrent: 0, max };
@@ -134,7 +135,7 @@ async function processEntity(entityId, options) {
                     }
                     return { newCurrent: newCurNoMaint, max };
                 }
-
+                console.log('pasamos por aqui?');
                 if (!haveNEach(required)) {
                     // Not enough for full maintenance: lose one population unit (penalty is small per interval)
                     const newCur = Math.max(0, cur - 1);
