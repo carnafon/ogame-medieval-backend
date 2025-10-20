@@ -303,7 +303,9 @@ async function processEntity(entityId, options) {
                 current_population: newPopulation,
                 max_population: maxPopulation,
                 available_population: Math.max(0, newPopulation - occupation)
-            }
+            },
+            // Provide resource deltas for centralized logging in runResourceGeneratorJob
+            resource_deltas: resourceDeltas
         };
     } catch (err) {
         try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
