@@ -229,6 +229,24 @@ async function processEntity(entityId, options) {
                 if (typeof newResources[k] === 'number') newResources[k] = Math.max(0, newResources[k]);
             });
 
+            // Compute deltas (new - old) and log added/subtracted resources per entity
+            try {
+                const deltas = {};
+                const allKeys = new Set([...(Object.keys(currentResources || {})), ...(Object.keys(newResources || {}))]);
+                for (const k of allKeys) {
+                    const oldV = Number(currentResources && currentResources[k] ? currentResources[k] : 0);
+                    const newV = Number(newResources && newResources[k] ? newResources[k] : 0);
+                    const diff = newV - oldV;
+                    if (diff !== 0) deltas[k] = diff;
+                }
+                if (Object.keys(deltas).length > 0) {
+                    // Log format: entity id and map of resource -> delta (positive means added, negative means subtracted)
+                    console.log(`[RESOURCE_GEN] entity=${entityId} resource_deltas:`, deltas);
+                }
+            } catch (logErr) {
+                console.warn('Failed to compute or log resource deltas for entity', entityId, logErr && logErr.message);
+            }
+
             // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
             // Reutilizamos setResourcesWithClient (que actualmente solo actualiza wood/stone/food)
             // Para soportar recursos dinámicos, llamamos a una nueva función genérica que actualice cualquier recurso.
