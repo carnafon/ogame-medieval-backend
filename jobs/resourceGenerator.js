@@ -263,9 +263,19 @@ async function processEntity(entityId, options) {
             }
 
             // 🔹 Guardar nuevas cantidades usando la función que opera con el client actual
-            // Reutilizamos setResourcesWithClient (que actualmente solo actualiza wood/stone/food)
-            // Para soportar recursos dinámicos, llamamos a una nueva función genérica que actualice cualquier recurso.
-            await require('../utils/resourcesService').setResourcesWithClientGeneric(client, entityId, newResources);
+            // Para soportar recursos dinámicos, llamamos a la función genérica que actualice cualquier recurso.
+            const rs = require('../utils/resourcesService');
+            try {
+                // Debug snapshot: current/new
+                console.log(`[RESOURCE_GEN][DEBUG] entity=${entityId} currentResources snapshot:`, currentResources);
+                console.log(`[RESOURCE_GEN][DEBUG] entity=${entityId} newResources intent:`, newResources);
+                await rs.setResourcesWithClientGeneric(client, entityId, newResources);
+                const after = await rs.getResourcesWithClient(client, entityId);
+                console.log(`[RESOURCE_GEN][DEBUG] entity=${entityId} afterResources snapshot:`, after);
+            } catch (saveErr) {
+                console.warn(`[RESOURCE_GEN] Failed to save resources for entity=${entityId}:`, saveErr && saveErr.message);
+                throw saveErr;
+            }
 
     // Ajuste de población escalado por número de ticks pasados
     let newPopulation = popStats.current_population;

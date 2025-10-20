@@ -112,6 +112,28 @@ const RESOURCE_CATEGORIES = {
     gold: 'gold'
 };
 
+// Map common spanish/english synonyms to canonical production keys
+function normalizeBuildingType(buildingType) {
+    if (!buildingType) return buildingType;
+    const key = buildingType.toString().toLowerCase();
+    const map = {
+        'aserradero': 'sawmill', 'sawmill': 'sawmill',
+        'carpinteria': 'carpinteria', 'carpintero': 'carpinteria',
+        'cantera': 'quarry', 'quarry': 'quarry',
+        'granja': 'farm', 'farm': 'farm',
+        'pozo': 'well', 'well': 'well',
+        'clay_pit': 'clay_pit', 'mina_carbon': 'coal_mine', 'coal_mine': 'coal_mine',
+        'mina_cobre': 'copper_mine', 'copper_mine': 'copper_mine',
+        'sheepfold': 'sheepfold', 'ovelario': 'sheepfold',
+        'apiary': 'apiary', 'colmenar': 'apiary',
+        'fabrica_ladrillos': 'fabrica_ladrillos', 'bazar_especias': 'bazar_especias',
+        'alfareria': 'alfareria', 'tintoreria_morada': 'tintoreria_morada',
+        'herreria': 'herreria', 'forja': 'forja',
+        'salazoneria': 'salazoneria', 'libreria': 'libreria', 'cerveceria': 'cerveceria'
+    };
+    return map[key] || key;
+}
+
 
 // -----------------------------------------------------------------
 // ⭐️ FUNCIONES AUXILIARES
@@ -215,9 +237,9 @@ const calculateProduction = (userBuildings, populationStats, factionBonusesOrNam
     if (!Array.isArray(userBuildings)) return production;
 
     userBuildings.forEach(building => {
-        const rate = PRODUCTION_RATES[building.type];
+        const prodKey = normalizeBuildingType(building.type);
+        const rate = PRODUCTION_RATES[prodKey];
         if (!rate) return;
-
         const qty = (typeof building.level === 'number')
             ? building.level
             : (typeof building.count === 'number' ? building.count : 0);

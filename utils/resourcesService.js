@@ -181,6 +181,11 @@ async function setResourcesWithClientGeneric(client, entityId, resources) {
     `SELECT rt.name, ri.amount FROM resource_inventory ri JOIN resource_types rt ON ri.resource_type_id = rt.id WHERE ri.entity_id = $1`,
     [entityId]
   );
+  // Debug: show if any provided keys were ignored because they don't exist in resource_types
+  const providedKeys = Object.keys(resources).map(k => (k||'').toString().toLowerCase());
+  const knownKeys = Object.keys(nameToId);
+  const ignored = providedKeys.filter(k => !knownKeys.includes(k));
+  if (ignored && ignored.length > 0) console.warn(`[resourcesService] Ignored unknown resource keys for entity=${entityId}:`, ignored);
   return Object.fromEntries(updated.rows.map(r => [r.name.toLowerCase(), parseInt(r.amount, 10)]));
 }
 
