@@ -304,5 +304,19 @@ async function calculateAvailablePopulationWithClient(client, entityId) {
   return { entityId, current, occupation, available, breakdown, total: current, max };
 }
 
-module.exports = { initPopulations, getPopulationSummary, getPopulationSummaryWithClient, setPopulationForTypeWithClient, POP_TYPES, computeOccupationFromBuildings, calculateAvailablePopulation, calculateAvailablePopulationWithClient };
+module.exports = {
+  initPopulations,
+  getPopulationSummary,
+  getPopulationSummaryWithClient,
+  getPopulationRowsWithClient,
+  getPopulationByTypeWithClient,
+  setPopulationForType,
+  setPopulationForTypeWithClient,
+  adjustPopulationForTypeWithClient,
+  adjustPopulationForType,
+  POP_TYPES,
+  computeOccupationFromBuildings,
+  calculateAvailablePopulation,
+  calculateAvailablePopulationWithClient
+};
 
