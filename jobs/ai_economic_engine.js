@@ -125,7 +125,8 @@ async function runEconomicUpdate(pool) {
                         console.log(`[AI Engine] entity=${entityId} resource before:`, before, 'toWrite (after applying deltas):', toWrite);
                         await resourcesService.setResourcesWithClientGeneric(client, entityId, toWrite);
                         // update the entities.last_resource_update timestamp so other systems can inspect it
-                        await client.query('UPDATE entities SET last_resource_update = $1 WHERE id = $2', [now.toISOString(), entityId]);
+                        const entityService = require('../utils/entityService');
+                        await entityService.updateEntity(client, entityId, { last_resource_update: now.toISOString() });
                         // log after snapshot via resourcesService
                         const after = await resourcesService.getResourcesWithClient(client, entityId);
                         console.log(`[AI Engine] entity=${entityId} resource after:`, after);
@@ -568,7 +569,8 @@ async function completeConstruction(client, ai, entityRow) {
     const newBuildings = Object.assign({}, runtime.buildings || {});
     newBuildings[building_id] = level_to_upgrade;
     const newRuntime = Object.assign({}, runtime, { buildings: newBuildings, current_construction: null });
-    await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [newRuntime, entityRow.id]);
+    const entityService = require('../utils/entityService');
+    await entityService.updateEntity(client, entityRow.id, { ai_runtime: newRuntime });
 
     // If the building completed is a house-type, update the corresponding population max bucket
     try {
@@ -728,7 +730,8 @@ async function decideNewConstruction(client, ai, entityRow) {
     const newConstruction = { building_id: bestUpgrade, level_to_upgrade: reqs.nextLevel, finish_time: finishTime.toISOString() };
 
     const newRuntime = Object.assign({}, runtime, { current_construction: newConstruction, resources: currentResources });
-    await client.query('UPDATE entities SET ai_runtime = $1 WHERE id = $2', [newRuntime, entityRow.id]);
+    const entityService = require('../utils/entityService');
+    await entityService.updateEntity(client, entityRow.id, { ai_runtime: newRuntime });
 
     console.log(`[AI Engine] 🛠️ entity ${entityRow.id} inició construcción ${bestUpgrade} Nivel ${reqs.nextLevel}.`);
 }

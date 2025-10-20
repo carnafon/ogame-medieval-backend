@@ -124,8 +124,13 @@ async function deleteCityById(clientOrPool, id) {
         try {
             await entityService.deleteEntity(client, aiRow.rows[0].entity_id);
         } catch (e) {
-            // fallback to direct delete if service fails
-            await client.query('DELETE FROM entities WHERE id = $1', [aiRow.rows[0].entity_id]);
+            // fallback: attempt deletion via entityService using pool (centralized, no raw SQL)
+            try {
+                await entityService.deleteEntity(pool, aiRow.rows[0].entity_id);
+            } catch (e2) {
+                // If even that fails, log and continue (avoid raw SQL here to keep centralization)
+                console.warn('Failed to delete linked entity via entityService fallback:', e2.message);
+            }
         }
     }
     await client.query('DELETE FROM ai_cities WHERE id = $1', [id]);

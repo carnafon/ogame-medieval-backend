@@ -109,6 +109,18 @@ async function findEntityByCoords(clientOrPool, x, y) {
   return res.rows.length ? res.rows[0] : null;
 }
 
+// Return array of all entity ids (client-aware)
+async function listAllEntityIds(clientOrPool) {
+  const usingClient = !!(clientOrPool && clientOrPool.query && clientOrPool.release);
+  const q = `SELECT id FROM entities`;
+  if (usingClient) {
+    const res = await clientOrPool.query(q);
+    return res.rows.map(r => r.id);
+  }
+  const res = await pool.query(q);
+  return res.rows.map(r => r.id);
+}
+
 async function lockEntity(client, id) {
   // expects a client
   await client.query(`SELECT * FROM entities WHERE id = $1 FOR UPDATE`, [id]);
@@ -209,6 +221,8 @@ module.exports = {
   getEntityCoords,
   lockEntity,
   listEntitiesForMap,
+  listNearbyAICities,
+  listAllEntityIds,
   updateEntity,
   deleteEntity
 };

@@ -24,21 +24,13 @@ async function processEntity(entityId, options) {
         await client.query('BEGIN');
 
 
-            // 🔹 Obtener datos base de la entidad (lock solo la fila de entities para evitar FOR UPDATE en outer join)
-            const entityRes = await client.query(
-              `SELECT id, type, last_resource_update, faction_id, x_coord, y_coord
-                 FROM entities
-                 WHERE id = $1
-                 FOR UPDATE`,
-                [entityId]
-            );
-
-    if (entityRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return;
-    }
-
-    const entity = entityRes.rows[0];
+                        // 🔹 Obtener datos base de la entidad mediante entityService (bloquea si forUpdate=true)
+                        const entityService = require('../utils/entityService');
+                        const entity = await entityService.getEntityById(client, entityId, true);
+                        if (!entity) {
+                                await client.query('ROLLBACK');
+                                return;
+                        }
     // Obtener nombre de facción (no necesita lock)
     let faction_name = '';
     if (entity.faction_id) {
@@ -312,11 +304,12 @@ async function processEntity(entityId, options) {
 async function runResourceGeneratorJob() {
     try {
         console.log("-> Iniciando cálculo de recursos para todos los jugadores.");
-        // Obtener lista de usuarios
-        const res = await pool.query('SELECT id FROM entities');
-        // Usamos Promise.all para procesar los usuarios en paralelo y terminar más rápido.
-        // Si tienes miles de usuarios, considera limitar la concurrencia (ej: a 100).
-        const results = await Promise.all(res.rows.map(row => processEntity(row.id, currentOptions).catch(err => ({ error: err.message, entityId: row.id }))));
+    // Obtener lista de usuarios usando entityService
+    const entityService = require('../utils/entityService');
+    const ids = await entityService.listAllEntityIds(pool);
+    // Usamos Promise.all para procesar los usuarios en paralelo y terminar más rápido.
+    // Si tienes miles de usuarios, considera limitar la concurrencia (ej: a 100).
+    const results = await Promise.all(ids.map(id => processEntity(id, currentOptions).catch(err => ({ error: err.message, entityId: id }))));
 
         console.log("-> Generación de recursos completada.");
         return results;
