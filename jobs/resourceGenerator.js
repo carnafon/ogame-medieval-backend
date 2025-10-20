@@ -338,11 +338,12 @@ async function runResourceGeneratorJob() {
             if (r.resource_deltas && entityIdLog) {
                 console.log(`[RESOURCE_GEN] entity=${entityIdLog} resource_deltas:`, r.resource_deltas);
             }
+             console.log(`[RESOURCE_GEN] 2 entity=${entityIdLog} resource_deltas:`, r.resource_deltas);
         }
     } catch (logAllErr) {
         console.warn('Failed to emit centralized resource delta logs:', logAllErr && logAllErr.message);
     }
-        console.log("WOLOLO");
+
         console.log("-> Generación de recursos completada.");
         return results;
     } catch (err) {
