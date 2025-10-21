@@ -207,18 +207,21 @@ async function processEntity(entityId, options) {
                 const occPatrician = (occupation && Number.isFinite(Number(occupation.patrician)) ? Number(occupation.patrician) : 0);
 
                 if (poorRes.newCurrent !== undefined) {
+                    const clampedPoor = Math.max(1, Number.isFinite(Number(poorRes.newCurrent)) ? Number(poorRes.newCurrent) : 1);
                     console.debug('updating poor population bucket');
-                    await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', poorRes.newCurrent, poorRes.max || 0);
+                    await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', clampedPoor, poorRes.max || 0);
                     // update local popMap as well
-                    popMap.poor = { current: poorRes.newCurrent, max: poorRes.max || 0 };
+                    popMap.poor = { current: clampedPoor, max: poorRes.max || 0 };
                 }
                 if (burgessRes.newCurrent !== undefined) {
-                    await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'burgess', burgessRes.newCurrent, burgessRes.max || 0);
-                    popMap.burgess = { current: burgessRes.newCurrent, max: burgessRes.max || 0 };
+                    const clampedBurgess = Math.max(1, Number.isFinite(Number(burgessRes.newCurrent)) ? Number(burgessRes.newCurrent) : 1);
+                    await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'burgess', clampedBurgess, burgessRes.max || 0);
+                    popMap.burgess = { current: clampedBurgess, max: burgessRes.max || 0 };
                 }
                 if (patricianRes.newCurrent !== undefined) {
-                    await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'patrician', patricianRes.newCurrent, patricianRes.max || 0);
-                    popMap.patrician = { current: patricianRes.newCurrent, max: patricianRes.max || 0 };
+                    const clampedPatrician = Math.max(1, Number.isFinite(Number(patricianRes.newCurrent)) ? Number(patricianRes.newCurrent) : 1);
+                    await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'patrician', clampedPatrician, patricianRes.max || 0);
+                    popMap.patrician = { current: clampedPatrician, max: patricianRes.max || 0 };
                 }
             } catch (pErr) {
                 console.warn('Failed to persist population type updates:', pErr.message);
