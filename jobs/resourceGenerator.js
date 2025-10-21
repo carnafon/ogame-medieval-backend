@@ -110,7 +110,7 @@ async function processEntity(entityId, options) {
                 const max = popMap[typeKey]?.max || 0;
 
                 // Helper: check availability of n units for each key (all keys must have >= n)
-                const haveNEach = (n) => resourceKeys.length > 0 && resourceKeys.every(k => (newResources[k] || 0) >= n);
+                const haveNEachCommon = (n) => resourceKeys.length > 0 && resourceKeys.every(k => (newResources[k] || 0) >= n);
 
                 // Poor bucket: requires consuming 1 of each common resource to initialize/grow
                 if (typeKey === 'poor') {
@@ -131,14 +131,14 @@ async function processEntity(entityId, options) {
                         // No maintenance required in this interval
                         // Still allow growth if capacity and at least 1 unit of each common resource remains
                         let newCurNoMaint = cur;
-                        if ((max - cur) > 0 && haveNEach(1)) {
-                            resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                if ((max - cur) > 0 && haveNEachCommon(1)) {
+                    resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
                             newCurNoMaint = Math.min(max, cur + 1);
                         }
                         return { newCurrent: newCurNoMaint, max };
                     }
 
-                    if (!haveNEach(required)) {
+                    if (!haveNEachCommon(required)) {
                         // Not enough for full maintenance: lose one population unit (penalty is small per interval)
                         const newCur = Math.max(0, cur - 1);
                         return { newCurrent: newCur, max };
@@ -149,46 +149,50 @@ async function processEntity(entityId, options) {
 
                     // Growth: if capacity and at least 1 unit of each common resource remains, grow by 1
                     let newCur = cur;
-                    if ((max - cur) > 0 && haveNEach(1)) {
+                    if ((max - cur) > 0 && haveNEachCommon(1)) {
                         resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
                         newCur = Math.min(max, cur + 1);
                     }
                     return { newCurrent: newCur, max };
                 }
 
-                // Burgess/Patrician: use representative resource(s) (any one) for growth/maintenance
-                let keysForBucket = resourceKeys;
-                if (typeKey === 'burgess') keysForBucket = resourceKeys.length > 0 ? resourceKeys : ['lumber'];
-                if (typeKey === 'patrician') keysForBucket = resourceKeys.length > 0 ? resourceKeys : ['spice'];
+                // Burgess/Patrician: require that ALL resources of the category are
+                // available for maintenance/growth. If not all are present, the
+                // bucket loses 1 population unit (small penalty per interval).
+                // Fall back to a representative resource if the category is empty.
+                let keysForBucket = resourceKeys && resourceKeys.length > 0 ? resourceKeys : [];
+                if (keysForBucket.length === 0) {
+                    if (typeKey === 'burgess') keysForBucket = ['lumber'];
+                    if (typeKey === 'patrician') keysForBucket = ['spice'];
+                }
 
-                // Helper: check if we have at least n units in ANY of the provided keys
-                const haveAtLeastInAny = (n) => keysForBucket.length > 0 && keysForBucket.some(k => (newResources[k] || 0) >= n);
+                // Helper: check if we have at least n units for EVERY provided key
+                const haveNEach = (n) => keysForBucket.length > 0 && keysForBucket.every(k => (newResources[k] || 0) >= n);
 
-                // If there is currently no population of this type, allow growth by consuming 1 of a representative resource
+                // If there is currently no population of this type, allow growth by
+                // consuming 1 unit of EACH resource of the category (strict requirement)
                 if (cur <= 0) {
-                    if (max > 0 && haveAtLeastInAny(1)) {
-                        for (const k of keysForBucket) {
-                            if ((newResources[k] || 0) >= 1) { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); break; }
-                        }
+                    if (max > 0 && haveNEach(1)) {
+                        keysForBucket.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
                         return { newCurrent: 1, max };
                     }
                     return { newCurrent: 0, max };
                 }
 
-                // Maintenance: compute required food consumption for non-poor buckets as 0 (they use representative resources)
-                const required = 0;
-
-                if (required <= 0) {
-                    let newCurNoMaint = cur;
-                    if ((max - cur) > 0 && haveAtLeastInAny(1)) {
-                        for (const k of keysForBucket) {
-                            if ((newResources[k] || 0) >= 1) { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); newCurNoMaint = Math.min(max, cur + 1); break; }
-                        }
+                // Maintenance/growth for existing population: require 1 of each key
+                // to avoid decline. If we have them and space, consume 1 of each
+                // and grow by 1. If we lack them, reduce population by 1.
+                if (haveNEach(1)) {
+                    let newCur = cur;
+                    if ((max - cur) > 0) {
+                        keysForBucket.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
+                        newCur = Math.min(max, cur + 1);
                     }
-                    return { newCurrent: newCurNoMaint, max };
+                    return { newCurrent: newCur, max };
                 }
 
-                return { newCurrent: cur, max };
+                // Not enough of the full set: lose one population unit
+                return { newCurrent: Math.max(0, cur - 1), max };
             };
 
             const poorRes = tryConsumeForType('poor', COMMON_RES);
