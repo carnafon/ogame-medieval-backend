@@ -444,11 +444,13 @@ async function buildPlanner(perception, pool, opts = {}) {
     const bucket = mapBuildingToPopulationBucket(buildingId);
     let perTypeMax = null;
     let perTypeCurrent = null;
+    let perTypeAvailable = null;
     try {
       const populationService = require('../utils/populationService');
       const row = await populationService.getPopulationByTypeWithClient(pool, entityId, bucket);
       perTypeCurrent = Number(row.current || 0);
       perTypeMax = Number(row.max || 0);
+      perTypeAvailable = Number(row.available || Math.max(0, perTypeMax - perTypeCurrent));
     } catch (e) {
       perTypeMax = null;
     }
@@ -460,7 +462,7 @@ async function buildPlanner(perception, pool, opts = {}) {
   const isHouseType = buildingId === 'house' || buildingId.startsWith('casa') || buildingId.startsWith('house');
   const hasCapacity = (perTypeMax === null) || (perTypeCurrent < perTypeMax) || isHouseType;
   // Also mark whether available population slots are sufficient for popNeeded (if popNeeded > 0)
-  const availableSlots = (perTypeMax === null) ? Infinity : Math.max(0, perTypeMax - perTypeCurrent);
+  const availableSlots = (perTypeAvailable === null) ? ((perTypeMax === null) ? Infinity : Math.max(0, perTypeMax - perTypeCurrent)) : perTypeAvailable;
   const hasEnoughPopSlots = isHouseType ? true : (availableSlots >= popNeeded);
     // which resources does this building produce (positive rate)
     const produces = Object.keys(rates || {}).filter(k => (Number(rates[k]) || 0) > 0);
@@ -474,14 +476,14 @@ async function buildPlanner(perception, pool, opts = {}) {
       })[0] || null;
     } catch(e) { primaryProduce = produces[0] || null; }
 
-    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, perTypeMax, hasEnoughPopSlots, produces, primaryProduce, priorityBoost });
+    candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, perTypeMax, perTypeAvailable, hasEnoughPopSlots, produces, primaryProduce, priorityBoost });
   }
 
   // Filter out candidates that explicitly require population slots we don't have (unless they are house types)
   const filteredCandidates = candidates.filter(c => {
     const isHouseTypeLocal = c.buildingId === 'house' || c.buildingId.startsWith('casa') || c.buildingId.startsWith('house');
-    // If perTypeMax is explicitly 0 or null for non-house types, it's likely uninitialized; filter out
-    if (!isHouseTypeLocal && (c.perTypeMax === null || c.perTypeMax === 0)) return false;
+    // If perTypeAvailable is explicitly 0 or null for non-house types, it's likely uninitialized or zero available; filter out
+    if (!isHouseTypeLocal && (c.perTypeAvailable === null || c.perTypeAvailable === 0)) return false;
     if (isHouseTypeLocal) return true;
     if (typeof c.hasEnoughPopSlots === 'boolean' && !c.hasEnoughPopSlots) return false;
     return true;
@@ -556,7 +558,7 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       }
 
       // If building consumes population (popNeededForThisBuild > 0) ensure there are enough available slots
-      const available = Math.max(0, maxv - cur);
+      const available = Number(popRow.available !== undefined ? popRow.available : Math.max(0, maxv - cur));
       if (!isHouseTypeLocal && popNeededForThisBuild > 0 && available < popNeededForThisBuild) {
         logEvent({ type: 'build_failed_population_insufficient_slots', entityId, buildingId, bucket, current: cur, max: maxv, popNeeded: popNeededForThisBuild, available });
         await client.query('ROLLBACK');
@@ -709,15 +711,57 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
   }
   const bestTrade = (tradeActions && tradeActions.length > 0) ? tradeActions[0] : null;
 
+  // Helper: check if building a house-type is allowed based on equality of current vs max for the target bucket
+  async function isHouseBuildAllowed(poolRef, entityId, buildingIdLocal) {
+    if (!buildingIdLocal) return true;
+    const lower = buildingIdLocal.toString().toLowerCase();
+    // map building to bucket that should trigger house construction
+    let bucketToCheck = null;
+    if (lower === 'house' || lower === 'house' || lower === 'casa') bucketToCheck = 'poor';
+    else if (lower === 'casa_de_piedra' || lower.includes('piedra')) bucketToCheck = 'burgess';
+    else if (lower === 'casa_de_ladrillos' || lower.includes('ladrill')) bucketToCheck = 'patrician';
+    // if it's not one of these special house types, allow
+    if (!bucketToCheck) return true;
+    try {
+      const populationServiceLocal = require('../utils/populationService');
+      const client = await poolRef.connect();
+      try {
+        const row = await populationServiceLocal.getPopulationByTypeWithClient(client, entityId, bucketToCheck);
+        const cur = Number(row.current || 0);
+        const maxv = Number(row.max || 0);
+        return cur === maxv;
+      } finally {
+        client.release();
+      }
+    } catch (e) {
+      return false; // if we can't verify, be conservative and disallow
+    }
+  }
+
   const execResults = [];
 
   // Simple policy: If bestBuild exists and has payback < threshold (e.g., 200) and hasCapacity, prefer build.
   const PAYBACK_THRESHOLD = opts.paybackThreshold || 200;
   if (bestBuild) {
-    if (!bestBuild.hasCapacity) {
-      logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
-    } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
-      logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
+    // If bestBuild is a house-type, only allow it when the corresponding bucket's current == max
+    const isHouseBest = bestBuild.buildingId === 'house' || bestBuild.buildingId.startsWith('casa') || bestBuild.buildingId.startsWith('house');
+    if (isHouseBest) {
+      const allowed = await isHouseBuildAllowed(pool, cityId, bestBuild.buildingId);
+      if (!allowed) {
+        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'house_not_needed_per_bucket', candidate: bestBuild });
+        // treat as skipped; do not proceed to build
+        // Note: we still allow other non-house candidates to be considered below
+      } else if (!bestBuild.hasCapacity) {
+        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
+      } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
+        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
+      }
+    } else {
+      if (!bestBuild.hasCapacity) {
+        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
+      } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
+        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
+      }
     }
   }
 
@@ -769,10 +813,16 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     const rejectedN = (buildPlannerResult && buildPlannerResult.rejectedDueToPopCount) || 0;
     const houseCand = (buildPlannerResult && buildPlannerResult.houseCandidate) || null;
     if ((!bestBuild || !bestBuild.hasCapacity || (bestBuild && bestBuild.payback > PAYBACK_THRESHOLD)) && rejectedN > 0 && houseCand) {
-      logEvent({ type: 'build_attempt_house_for_capacity', entityId: cityId, reason: 'no_pop_slots', rejected: rejectedN, house: houseCand.buildingId });
-      const hres = await executeBuildAction(pool, houseCand, perception, {});
-      execResults.push({ action: { type: 'build', building: houseCand.buildingId }, result: hres });
-      if (hres && hres.success) return { success: true, cityId, acted: true, results: execResults };
+      // Only attempt to build a house if the specific bucket is at capacity (we actually need that capacity)
+      const allowedHouseAttempt = await isHouseBuildAllowed(pool, cityId, houseCand.buildingId);
+      if (allowedHouseAttempt) {
+        logEvent({ type: 'build_attempt_house_for_capacity', entityId: cityId, reason: 'no_pop_slots', rejected: rejectedN, house: houseCand.buildingId });
+        const hres = await executeBuildAction(pool, houseCand, perception, {});
+        execResults.push({ action: { type: 'build', building: houseCand.buildingId }, result: hres });
+        if (hres && hres.success) return { success: true, cityId, acted: true, results: execResults };
+      } else {
+        logEvent({ type: 'build_attempt_house_skipped_not_full', entityId: cityId, reason: 'not_at_capacity_per_bucket', house: houseCand && houseCand.buildingId });
+      }
     }
   } catch (e) {
     // ignore failures here
