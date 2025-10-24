@@ -804,18 +804,73 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
   const buildCandidates = buildPlannerResult && buildPlannerResult.candidates ? buildPlannerResult.candidates : [];
 
   // Decision: choose the top candidate between best build (low payback) and best trade (high score)
-  // prefer base producers when available
+  // We'll prioritize builds that address deficits for population maintenance per-bucket: poor(common) -> burgess(processed) -> patrician(specialized)
   const BASE_PREF = ['sawmill', 'quarry', 'farm'];
   let bestBuild = null;
   if (buildCandidates && buildCandidates.length > 0) {
     // try to find a base pref candidate among top few
     const topSlice = buildCandidates.slice(0, 10);
-    // First, prioritize candidates that produce resources the AI remembered as missing
+
+    // 1) Prioritize AI memory-missing resources first (as before)
     const missing = Array.from(getMissingResourcesFromMemory(cityId));
     if (missing && missing.length > 0) {
       const prodMatch = topSlice.find(c => c.produces && c.produces.some(p => missing.includes(p)));
       if (prodMatch) { bestBuild = prodMatch; }
     }
+
+    // 2) Compute deficits grouped by population bucket using production net and current inventory
+    if (!bestBuild) {
+      try {
+        const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
+        // load buildings and population snapshot to estimate production
+        const bRows = await getBuildings(perception.entityId);
+        // sum current population across buckets
+        let totalPop = 0;
+        try {
+          const popRows = await populationService.getPopulationRowsWithClient(pool, cityId);
+          for (const k of Object.keys(popRows || {})) totalPop += Number(popRows[k].current || 0);
+        } catch (e) { totalPop = 0; }
+        const prodPerTick = gameUtils.calculateProduction(bRows, { current_population: totalPop }) || {};
+
+        // bucket mapping helper
+        const categoryMap = gameUtils.RESOURCE_CATEGORIES || {};
+        function resourceBucketForResource(r) {
+          const cat = categoryMap[r] || null;
+          if (cat === 'common') return 'poor';
+          if (cat === 'processed') return 'burgess';
+          if (cat === 'specialized') return 'patrician';
+          return null;
+        }
+
+        // gather deficits per bucket
+  const deficits = { poor: new Set(), burgess: new Set(), patrician: new Set() };
+  // helper to iterate object keys when perception.inventory may be sparse
+  function rowsOrKeys(obj) { try { return Object.keys(obj || {}); } catch (e) { return []; } }
+  const keys = new Set([...rowsOrKeys(perception.inventory || {}), ...Object.keys(prodPerTick || {})]);
+        for (const res of keys) {
+          if (!res || res === 'gold') continue;
+          const cur = Number(perception.inventory[res] || 0);
+          const net = Number(prodPerTick[res] || 0);
+          if (net < 0 || cur < SAFETY) {
+            const bucket = resourceBucketForResource(res);
+            if (bucket) deficits[bucket].add(res);
+          }
+        }
+
+        // choose candidate by bucket priority
+        const bucketOrder = [ 'poor', 'burgess', 'patrician' ];
+        for (const bk of bucketOrder) {
+          if ((deficits[bk] || new Set()).size === 0) continue;
+          // find first candidate producing any resource in this bucket
+          const match = (buildCandidates || []).find(c => c.produces && c.produces.some(p => deficits[bk].has(p)));
+          if (match) { bestBuild = match; break; }
+        }
+      } catch (e) {
+        // ignore and fallback to base pref
+      }
+    }
+
+    // 3) fallback: base preference or top candidate
     if (!bestBuild) {
       const basePick = topSlice.find(c => BASE_PREF.includes(c.buildingId));
       if (basePick) bestBuild = basePick;
