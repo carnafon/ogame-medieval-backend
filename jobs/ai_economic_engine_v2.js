@@ -803,6 +803,34 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
   // buildPlannerResult: { candidates: [...], rejectedDueToPopCount: N, houseCandidate }
   const buildCandidates = buildPlannerResult && buildPlannerResult.candidates ? buildPlannerResult.candidates : [];
 
+  // Helper to compute deficit/surplus summary for common resources (used for logging before builds)
+  async function computeCommonDeficitSummary() {
+    try {
+      const bRows = await getBuildings(perception.entityId);
+      let totalPop = 0;
+      try {
+        const popRows = await populationService.getPopulationRowsWithClient(pool, perception.entityId);
+        for (const k of Object.keys(popRows || {})) totalPop += Number(popRows[k].current || 0);
+      } catch (e) { totalPop = 0; }
+      const prodPerTick = gameUtils.calculateProduction(bRows, { current_population: totalPop }) || {};
+      const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
+      const cats = gameUtils.RESOURCE_CATEGORIES || {};
+      const commonKeys = Object.keys(cats).filter(k => cats[k] === 'common');
+      const factor = 60 / (gameUtils.TICK_SECONDS || 60);
+      const summary = {};
+      for (const res of commonKeys) {
+        const stock = Number((perception.inventory && perception.inventory[res]) || 0);
+        const netPerTick = Number(prodPerTick[res] || 0);
+        const perMinute = netPerTick * factor;
+        const status = (netPerTick < 0 || stock < SAFETY) ? 'deficit' : 'surplus';
+        summary[res] = { stock, netPerTick, perMinute, status, safety: SAFETY };
+      }
+      return summary;
+    } catch (e) {
+      return {};
+    }
+  }
+
   // Decision: choose the top candidate between best build (low payback) and best trade (high score)
   // We'll prioritize builds that address deficits for population maintenance per-bucket: poor(common) -> burgess(processed) -> patrician(specialized)
   const BASE_PREF = ['sawmill', 'quarry', 'farm'];
@@ -866,7 +894,9 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
             const rejectedN = (buildPlannerResult && buildPlannerResult.rejectedDueToPopCount) || 0;
             const houseCand = (buildPlannerResult && buildPlannerResult.houseCandidate) || null;
             if (rejectedN > 0 && houseCand) {
-              logEvent({ type: 'build_attempt_house_due_to_poor_deficit', entityId, reason: 'poor_deficit_and_no_pop_slots', poorDeficit: Array.from(poorDeficit), rejectedN, house: houseCand.buildingId });
+              // log common resource deficit summary before attempting to build house
+              const commonSummaryBeforeHouse = await computeCommonDeficitSummary();
+              logEvent({ type: 'build_attempt_house_due_to_poor_deficit', entityId, reason: 'poor_deficit_and_no_pop_slots', poorDeficit: Array.from(poorDeficit), rejectedN, house: houseCand.buildingId, commonSummary: commonSummaryBeforeHouse });
               try {
                 const hres = await executeBuildAction(pool, houseCand, perception, {});
                 execResults.push({ action: { type: 'build', building: houseCand.buildingId }, result: hres });
@@ -914,7 +944,9 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
                     }
                   }
                   if (alt) {
-                    logEvent({ type: 'build_try_alternative_chain_poor', entityId: cityId, alternative: alt.buildingId, missing: res, chain });
+                    // log common resource deficit summary before attempting alternative producer build
+                    const commonSummaryBeforeAlt = await computeCommonDeficitSummary();
+                    logEvent({ type: 'build_try_alternative_chain_poor', entityId: cityId, alternative: alt.buildingId, missing: res, chain, commonSummary: commonSummaryBeforeAlt });
                     const ares = await executeBuildAction(pool, alt, perception, {});
                     execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
                     if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
@@ -1112,6 +1144,12 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     } catch (e) {
       // ignore and proceed with bestBuild
     }
+
+  // Log common deficit/surplus summary immediately before attempting the chosen build
+  try {
+    const commonSummaryBeforeBuild = await computeCommonDeficitSummary();
+    logEvent({ type: 'build_chosen_common_summary', entityId: cityId, chosen: (chosenBuild && chosenBuild.buildingId) || (bestBuild && bestBuild.buildingId), commonSummary: commonSummaryBeforeBuild });
+  } catch (e) { /* ignore logging errors */ }
 
   const bres = await executeBuildAction(pool, chosenBuild, perception, {});
   execResults.push({ action: { type: 'build', building: (chosenBuild && chosenBuild.buildingId) || (bestBuild && bestBuild.buildingId) }, result: bres });
