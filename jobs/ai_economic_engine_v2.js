@@ -235,6 +235,8 @@ function mapBuildingToPopulationBucket(buildingType) {
     if (cat === 'common') return 'poor';
     if (cat === 'processed') return 'burgess';
     if (cat === 'specialized') return 'patrician';
+    // strategic and other high-tier categories belong to patrician bucket as well
+    if (cat === 'strategic') return 'patrician';
   }
   if (key.includes('farm') || key.includes('well') || key.includes('sawmill') || key.includes('quarry')) return 'poor';
   if (key.includes('carpinter') || key.includes('fabrica') || key.includes('alfareria') || key.includes('tintoreria')) return 'burgess';
@@ -802,6 +804,21 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
 
   // buildPlannerResult: { candidates: [...], rejectedDueToPopCount: N, houseCandidate }
   const buildCandidates = buildPlannerResult && buildPlannerResult.candidates ? buildPlannerResult.candidates : [];
+
+  // Diagnostic: log top candidates (expanded) to help debugging planner decisions
+  try {
+    const topN = 8;
+    const topCandidates = (buildCandidates || []).slice(0, topN).map(c => ({
+      buildingId: c.buildingId,
+      produces: c.produces || [],
+      priorityBoost: Number(c.priorityBoost || 0),
+      adjustedValueSum: Number(c.adjustedValueSum || 0),
+      payback: Number(c.payback || 0),
+      hasCapacity: !!c.hasCapacity,
+      perTypeAvailable: c.perTypeAvailable
+    }));
+    logEvent({ type: 'build_planner_top_candidates', entityId: cityId, count: (buildCandidates || []).length, topCandidates });
+  } catch (e) { /* ignore logging errors */ }
 
   // Helper to compute deficit/surplus summary for common resources (used for logging before builds)
   async function computeCommonDeficitSummary() {
