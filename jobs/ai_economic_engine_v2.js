@@ -850,6 +850,25 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
 
   // Simple policy: If bestBuild exists and has payback < threshold (e.g., 200) and hasCapacity, prefer build.
   const PAYBACK_THRESHOLD = opts.paybackThreshold || 200;
+  // Override boost threshold: if a candidate has priorityBoost >= this, ignore payback limits
+  const OVERRIDE_PRIORITY_BOOST = typeof opts.overridePriorityBoost === 'number' ? opts.overridePriorityBoost : 8;
+
+  // helper: decide effective threshold for a candidate based on urgency (priorityBoost or low inventory)
+  function computeEffectiveThresholdForCandidate(candidate) {
+    const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
+    if (!candidate) return PAYBACK_THRESHOLD;
+    // if explicit high priority boost, override
+    if ((candidate.priorityBoost || 0) >= OVERRIDE_PRIORITY_BOOST) return Infinity;
+    // if candidate produces a resource we are low on, override
+    try {
+      const produces = candidate.produces || [];
+      for (const r of produces) {
+        const have = Number(perception.inventory && perception.inventory[r] || 0);
+        if (have < SAFETY) return Infinity;
+      }
+    } catch (e) { /* ignore */ }
+    return PAYBACK_THRESHOLD;
+  }
   if (bestBuild) {
     // If bestBuild is a house-type, only allow it when the corresponding bucket's current == max
     const isHouseBest = bestBuild.buildingId === 'house' || bestBuild.buildingId.startsWith('casa') || bestBuild.buildingId.startsWith('house');
@@ -888,8 +907,11 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
           // allow build to proceed by marking capacity true
           bestBuild.hasCapacity = true;
         }
-      } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
-        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
+      } else {
+        const effectiveThreshold = computeEffectiveThresholdForCandidate(bestBuild);
+        if (bestBuild.payback > effectiveThreshold) {
+          logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: effectiveThreshold, candidate: bestBuild });
+        }
       }
     } else {
       if (!bestBuild.hasCapacity) {
@@ -921,13 +943,19 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
           // allow build to proceed by marking capacity true
           bestBuild.hasCapacity = true;
         }
-      } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
-        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
+      } else {
+        const effectiveThreshold = computeEffectiveThresholdForCandidate(bestBuild);
+        if (bestBuild.payback > effectiveThreshold) {
+          logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: effectiveThreshold, candidate: bestBuild });
+        }
       }
     }
   }
 
-  if (bestBuild && bestBuild.hasCapacity && bestBuild.payback <= PAYBACK_THRESHOLD) {
+  // compute effective threshold for chosen bestBuild (used below to decide whether to proceed)
+  const effectiveThresholdForBest = bestBuild ? computeEffectiveThresholdForCandidate(bestBuild) : PAYBACK_THRESHOLD;
+
+  if (bestBuild && bestBuild.hasCapacity && bestBuild.payback <= effectiveThresholdForBest) {
     // attempt build
     // If there are clear deficits or low-stock resources, try to pick a candidate
     // that produces them even if it's not the top payback candidate.
