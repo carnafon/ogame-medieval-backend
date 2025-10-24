@@ -444,11 +444,12 @@ async function buildPlanner(perception, pool, opts = {}) {
     } else if (prodKey !== buildingId) {
       logEvent({ type: 'build_prod_key_mapped', entityId, buildingId, usedKey: prodKey });
     }
+    // Compute a raw production score (sum of production rates) instead of market-weighted value
+    // We'll prioritize buildings based on the city's own inventory/deficits rather than market prices.
     let rawValueSum = 0;
     for (const res of Object.keys(rates)) {
       const rate = Number(rates[res]) || 0;
-      const base = priceBaseMap[res] || 1;
-      rawValueSum += rate * base; // per level estimate
+      rawValueSum += rate; // per level production magnitude
     }
 
     // Determine if this building should be excluded from production-value calculations
@@ -456,26 +457,23 @@ async function buildPlanner(perception, pool, opts = {}) {
     const isSpecialProduction = (lowerId.includes('house') || lowerId.includes('casa') || lowerId.includes('sawmill') || lowerId.includes('aserradero') || lowerId.includes('quarry') || lowerId.includes('cantera') || lowerId.includes('farm') || lowerId.includes('granja'));
 
     if (rawValueSum <= 0 && !isSpecialProduction) {
-      // include a concise perceiveSnapshot value for debugging
       const perceptionSnapshotForLog = {
         inventory: perception && perception.inventory ? perception.inventory : {},
-        priceBaseMap: perception && perception.priceBaseMap ? perception.priceBaseMap : {},
         x: perception && typeof perception.x !== 'undefined' ? perception.x : null,
         y: perception && typeof perception.y !== 'undefined' ? perception.y : null,
         neighborsCount: perception && perception.neighbors ? perception.neighbors.length : 0
       };
-      logEvent({ type: 'build_candidate_skipped', entityId, buildingId, reason: 'no_production_value', valueSum: rawValueSum, priceBaseMap, perception: perceptionSnapshotForLog });
+      logEvent({ type: 'build_candidate_skipped', entityId, buildingId, reason: 'no_production_value', valueSum: rawValueSum, perception: perceptionSnapshotForLog });
       continue; // skip non-producer buildings for now
     }
 
-    // Adjust valueSum based on current stock and consumption urgency
+    // Adjust valueSum based on current stock and consumption urgency (use inventory, not market prices)
     let adjustedValueSum = rawValueSum;
     try {
       const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
       const multiplierParts = [];
       for (const res of Object.keys(rates)) {
         const produces = Number(rates[res]) || 0;
-        // projected net production over horizon
         const netPerTick = Number(productionPerTick[res] || 0);
         const projectedNet = netPerTick * (horizonSeconds / gameUtils.TICK_SECONDS);
         const curStock = Number(perception.inventory[res] || 0);
@@ -498,7 +496,6 @@ async function buildPlanner(perception, pool, opts = {}) {
       const combined = multiplierParts.reduce((a, b) => a * b, 1) ** (1 / Math.max(1, multiplierParts.length));
       adjustedValueSum = rawValueSum * combined;
     } catch (e) {
-      // fallback to raw value
       adjustedValueSum = rawValueSum;
     }
 
