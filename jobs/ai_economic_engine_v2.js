@@ -646,9 +646,15 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       }
     }
 
-    // population check: ensure per-type current < max unless building is a house
+    // population check: ensure there are enough per-type slots unless building is a house
     const bucket = mapBuildingToPopulationBucket(buildingId);
-    // Use populationService to lock/obtain the per-type row and check capacity
+    // Use populationService to lock/obtain the per-type row and check capacity within the same transaction
+    // Add an explicit FOR UPDATE to avoid races with concurrent ticks/actions
+    try {
+      await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [entityId]);
+    } catch (e) {
+      // ignore if table/rows missing; populationService will handle it
+    }
     const popRow = await populationService.getPopulationByTypeWithClient(client, entityId, bucket);
     if (popRow) {
       const cur = Number(popRow.current || 0);
@@ -656,7 +662,8 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       const popNeededForThisBuild = (reqs && typeof reqs.popForNextLevel === 'number') ? Number(reqs.popForNextLevel) : 0;
       const isHouseTypeLocal = buildingId === 'house' || buildingId.startsWith('casa') || buildingId.startsWith('house');
       // Diagnostic log to help debug population enforcement
-      logEvent({ type: 'build_population_check', entityId, buildingId, bucket, popRow: { current: cur, max: maxv, available: Number(popRow.available || 0) }, popNeeded: popNeededForThisBuild, isHouse: isHouseTypeLocal });
+      const reportedAvailable = Number(popRow.available !== undefined ? popRow.available : Math.max(0, maxv - cur));
+      logEvent({ type: 'build_population_check', entityId, buildingId, bucket, popRow: { current: cur, max: maxv, available: reportedAvailable }, popNeeded: popNeededForThisBuild, isHouse: isHouseTypeLocal });
 
       // If population row exists but max is zero (not initialized), treat as no capacity for non-house builds
       if (!isHouseTypeLocal && maxv === 0) {
@@ -666,18 +673,16 @@ async function executeBuildAction(pool, candidate, perception, opts = {}) {
       }
 
       // If building consumes population (popNeededForThisBuild > 0) ensure there are enough available slots
-      const available = Number(popRow.available !== undefined ? popRow.available : Math.max(0, maxv - cur));
+      const available = reportedAvailable;
       if (!isHouseTypeLocal && popNeededForThisBuild > 0 && available < popNeededForThisBuild) {
         logEvent({ type: 'build_failed_population_insufficient_slots', entityId, buildingId, bucket, current: cur, max: maxv, popNeeded: popNeededForThisBuild, available });
         await client.query('ROLLBACK');
         return { success: false, reason: 'population_insufficient_slots', bucket, current: cur, max: maxv, popNeeded: popNeededForThisBuild, available };
       }
-      // Also enforce that current < max for non-house types as before
-      if (!isHouseTypeLocal && cur >= maxv) {
-        logEvent({ type: 'build_failed_population_capacity', entityId, buildingId, bucket, current: cur, max: maxv });
-        await client.query('ROLLBACK');
-        return { success: false, reason: 'population_capacity', bucket, current: cur, max: maxv };
-      }
+
+      // Previously we also rejected when current >= max; that can conflict with available slots
+      // (e.g., available reported > 0 while current == max due to computed 'available'), so prefer
+      // the explicit available check above. Do not reject solely on cur >= max here.
     }
 
     // Deduct resources using generic consumer helper
@@ -981,7 +986,7 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     }
 
   const bres = await executeBuildAction(pool, chosenBuild, perception, {});
-    execResults.push({ action: { type: 'build', building: bestBuild.buildingId }, result: bres });
+  execResults.push({ action: { type: 'build', building: (chosenBuild && chosenBuild.buildingId) || (bestBuild && bestBuild.buildingId) }, result: bres });
     if (bres && bres.success) return { success: true, cityId, acted: true, results: execResults };
     // if build failed, try to prioritize building a producer of the missing resource (if that was the reason)
     if (bres && bres.success === false && bres.reason === 'insufficient_resources' && bres.resource) {
