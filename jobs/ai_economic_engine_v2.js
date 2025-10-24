@@ -264,6 +264,95 @@ function calculateUpgradeRequirementsFromConstants(buildingType, currentLevel) {
   };
 }
 
+/**
+ * Busca recursivamente una cadena de edificios que permitan obtener `resourceName`.
+ * Devuelve un array con el orden de construcción sugerido (primer elemento a construir primero).
+ * options:
+ *  - currentResources: mapa actual de inventario
+ *  - runtimeBuildings: niveles actuales por edificio (map)
+ *  - calc: resultado de populationService.calculateAvailablePopulation(entityId) (usa .available)
+ *  - maxDepth: profundidad máxima (default 4)
+ */
+function findProducerChain(resourceName, options = {}) {
+  if (!resourceName) return null;
+  const key = resourceName.toString().toLowerCase();
+  const prodRates = gameUtils.PRODUCTION_RATES || {};
+  const recipes = gameUtils.PROCESSING_RECIPES || {};
+  const BUILDING_COSTS_LOCAL = BUILDING_COSTS || {};
+
+  const currentResources = options.currentResources || {};
+  const runtimeBuildings = options.runtimeBuildings || {};
+  const calc = options.calc || {};
+  const maxDepth = typeof options.maxDepth === 'number' ? options.maxDepth : 4;
+  const visitedResources = options.visitedResources || new Set();
+
+  if (maxDepth <= 0) return null;
+  if (visitedResources.has(key)) return null;
+  visitedResources.add(key);
+
+  // 1) Direct producers
+  const directCandidates = [];
+  for (const [building, rates] of Object.entries(prodRates)) {
+    if (rates && Object.prototype.hasOwnProperty.call(rates, key) && Number(rates[key]) > 0) directCandidates.push(building);
+  }
+  // heuristic expansion: include buildings whose produced resource name partially matches
+  if (directCandidates.length === 0) {
+    for (const [building, rates] of Object.entries(prodRates)) {
+      if (!rates) continue;
+      for (const produced of Object.keys(rates)) {
+        const p = produced.toString().toLowerCase();
+        if (p.includes(key) || key.includes(p)) {
+          if (!directCandidates.includes(building)) directCandidates.push(building);
+        }
+      }
+      if (building.toString().toLowerCase().includes(key) && !directCandidates.includes(building)) directCandidates.push(building);
+    }
+  }
+
+  for (const candidate of directCandidates) {
+    try {
+      const curLevel = runtimeBuildings[candidate] || 0;
+      const reqs = calculateUpgradeRequirementsFromConstants(candidate, curLevel);
+      if (!reqs) continue;
+
+      const prodPopNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
+      if ((calc.available || 0) < prodPopNeeded) continue;
+
+      const missing = [];
+      for (const r in reqs.requiredCost) {
+        const needAmt = reqs.requiredCost[r] || 0;
+        const haveAmt = Number(currentResources[r] || 0);
+        if (haveAmt < needAmt) missing.push(r);
+      }
+      if (missing.length === 0) return [candidate];
+
+      for (const m of missing) {
+        const sub = findProducerChain(m, { currentResources, runtimeBuildings, calc, maxDepth: maxDepth - 1, visitedResources });
+        if (Array.isArray(sub) && sub.length > 0) return sub.concat([candidate]);
+      }
+    } catch (e) {
+      console.warn('[AI v2] findProducerChain candidate error for', candidate, e && e.message);
+      continue;
+    }
+  }
+
+  // 2) Try recipes: if resource is a processed product, attempt to resolve its inputs recursively
+  if (recipes && recipes[key]) {
+    const inputs = Object.keys(recipes[key] || {});
+    for (const inRes of inputs) {
+      const sub = findProducerChain(inRes, { currentResources, runtimeBuildings, calc, maxDepth: maxDepth - 1, visitedResources });
+      if (Array.isArray(sub) && sub.length > 0) {
+        // find processor building that produces key
+        for (const [b, rates] of Object.entries(prodRates)) {
+          if (rates && Number(rates[key]) > 0) return sub.concat([b]);
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 // Build planner: rank building upgrades by payback time (cost in gold / marginal value per tick)
 async function buildPlanner(perception, pool, opts = {}) {
   const priceBaseMap = perception.priceBaseMap || {};
@@ -449,10 +538,13 @@ async function buildPlanner(perception, pool, opts = {}) {
     let perTypeAvailable = null;
     try {
       const populationService = require('../utils/populationService');
-      const row = await populationService.getPopulationByTypeWithClient(pool, entityId, bucket);
-      perTypeCurrent = Number(row.current || 0);
-      perTypeMax = Number(row.max || 0);
-      perTypeAvailable = Number(row.available || Math.max(0, perTypeMax - perTypeCurrent));
+      const tmp = await pool.connect();
+      try {
+        const row = await populationService.getPopulationByTypeWithClient(tmp, entityId, bucket);
+        perTypeCurrent = Number(row.current || 0);
+        perTypeMax = Number(row.max || 0);
+        perTypeAvailable = Number(row.available || Math.max(0, perTypeMax - perTypeCurrent));
+      } finally { tmp.release(); }
     } catch (e) {
       perTypeMax = null;
     }
@@ -848,13 +940,51 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
         logEvent({ type: 'forced_buy_error', entityId: perception.entityId, missing, err: e && e.message });
       }
 
-      // If forced buy didn't succeed, find a candidate that produces the missing resource and has capacity
-      const alt = (buildCandidates || []).find(c => c.produces && c.produces.includes(missing) && c.hasCapacity);
-      if (alt) {
-        logEvent({ type: 'build_try_alternative', entityId: cityId, original: bestBuild.buildingId, alternative: alt.buildingId, missing });
-        const ares = await executeBuildAction(pool, alt, perception, {});
-        execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
-        if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
+      // If forced buy didn't succeed, attempt a recursive search for a producer chain for the missing resource
+      try {
+        // build runtimeBuildings map
+        const bRows = await getBuildings(perception.entityId);
+        const runtimeBuildings = {};
+        bRows.forEach(b => { runtimeBuildings[b.type] = b.level || 0; });
+        // compute population availability snapshot
+        let calc = {};
+        try { calc = await populationService.calculateAvailablePopulation(perception.entityId); } catch (e) { calc = {}; }
+
+        const chain = findProducerChain(missing, { currentResources: perception.inventory || {}, runtimeBuildings, calc, maxDepth: 4 });
+        if (Array.isArray(chain) && chain.length > 0) {
+          const first = chain[0];
+          logEvent({ type: 'build_producer_chain_found', entityId: cityId, missing, chain });
+          // try to locate a matching candidate from planner results
+          let alt = (buildCandidates || []).find(c => c.buildingId === first && c.hasCapacity);
+          if (!alt) {
+            // construct a minimal candidate object if planner didn't include it
+            const curLevel = runtimeBuildings[first] || 0;
+            const prodReqs = calculateUpgradeRequirementsFromConstants(first, curLevel);
+            if (prodReqs) {
+              // basic population availability check
+              const bucket = mapBuildingToPopulationBucket(first);
+              let perTypeRow = null;
+              try {
+                const tmpClient = await pool.connect();
+                try {
+                  perTypeRow = await populationService.getPopulationByTypeWithClient(tmpClient, perception.entityId, bucket);
+                } finally { tmpClient.release(); }
+              } catch (e) { perTypeRow = null; }
+              const perTypeAvailable = perTypeRow ? Number(perTypeRow.available || Math.max(0, Number(perTypeRow.max || 0) - Number(perTypeRow.current || 0))) : Infinity;
+              const popNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
+              const hasCapacity = (perTypeAvailable === Infinity) ? true : (perTypeAvailable >= popNeeded);
+              alt = { buildingId: first, reqs: prodReqs, hasCapacity, produces: Object.keys((gameUtils.PRODUCTION_RATES || {})[first] || {}) };
+            }
+          }
+          if (alt) {
+            logEvent({ type: 'build_try_alternative_chain', entityId: cityId, original: bestBuild && bestBuild.buildingId, alternative: alt.buildingId, missing, chain });
+            const ares = await executeBuildAction(pool, alt, perception, {});
+            execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
+            if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
+          }
+        }
+      } catch (chainErr) {
+        logEvent({ type: 'build_producer_chain_error', entityId: cityId, missing, err: chainErr && chainErr.message });
       }
     }
   }
