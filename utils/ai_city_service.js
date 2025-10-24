@@ -65,7 +65,8 @@ async function createPairedCity(clientOrPool, cityData) {
             honey: 400,
             wool: 400,
             copper: 800,
-            leather: 400
+            leather: 400,
+            gold: 3000
         };
         const resourcesService = require('./resourcesService');
         const rtRes = await resourcesService.getResourceTypesWithClient(client);
