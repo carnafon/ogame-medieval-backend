@@ -116,7 +116,7 @@ async function processEntity(entityId, options) {
                 if (typeKey === 'poor') {
                     // If there is currently no poor population, allow growth by consuming 1 of each common resource
                     if (cur <= 0) {
-                        if (max > 0 && haveNEach(1)) {
+                        if (max > 0 && haveNEachCommon(1)) {
                             resourceKeys.forEach(k => { newResources[k] = Math.max(0, (newResources[k] || 0) - 1); });
                             return { newCurrent: 1, max };
                         }
