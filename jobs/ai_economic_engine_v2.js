@@ -1083,7 +1083,7 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
   const execResults = [];
 
   // Simple policy: If bestBuild exists and has payback < threshold (e.g., 200) and hasCapacity, prefer build.
-  const PAYBACK_THRESHOLD = opts.paybackThreshold || 200;
+  const PAYBACK_THRESHOLD = opts.paybackThreshold || 2000;
   // Override boost threshold: if a candidate has priorityBoost >= this, ignore payback limits
   const OVERRIDE_PRIORITY_BOOST = typeof opts.overridePriorityBoost === 'number' ? opts.overridePriorityBoost : 8;
 
