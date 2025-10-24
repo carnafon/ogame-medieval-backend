@@ -203,7 +203,31 @@ async function executeTradeAction(pool, action, perception, opts = {}) {
         if (sellerStock > (opts.safetyStock || DEFAULTS.SAFETY_STOCK)) { sellerId = nb.id; break; }
       }
       if (!sellerId) { await client.query('ROLLBACK'); return { success: false, reason: 'no_seller' }; }
-
+      if (!sellerId) {
+        // Fallback: no cityIA seller found. Try npc_bazar entities.
+        try {
+          const bazRes = await client.query("SELECT id, x_coord, y_coord FROM entities WHERE type = 'npc_bazar'");
+          let chosenBazaar = null;
+          let bestDist = Infinity;
+          for (const b of bazRes.rows || []) {
+            try {
+              const bInv = await resourcesService.getResourcesWithClient(client, b.id);
+              const sellerStock = (bInv && bInv[resource]) || 0;
+              if (sellerStock > 0) {
+                // prefer closest bazaar (squared distance)
+                const dx = (perception.x || 0) - (b.x_coord || 0);
+                const dy = (perception.y || 0) - (b.y_coord || 0);
+                const d = (dx * dx) + (dy * dy);
+                if (d < bestDist) { bestDist = d; chosenBazaar = b.id; }
+              }
+            } catch (e) { /* ignore per-bazaar failures */ }
+          }
+          if (chosenBazaar) sellerId = chosenBazaar;
+        } catch (e) {
+          // ignore errors when searching bazaars
+        }
+      }
+      if (!sellerId) { await client.query('ROLLBACK'); return { success: false, reason: 'no_seller' }; }
       try {
         const snapshot = await marketService.tradeWithClient(client, perception.entityId, sellerId, resource, mp.price, qty);
         await client.query('COMMIT');
