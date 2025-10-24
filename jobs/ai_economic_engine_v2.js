@@ -860,13 +860,67 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
         // treat as skipped; do not proceed to build
         // Note: we still allow other non-house candidates to be considered below
       } else if (!bestBuild.hasCapacity) {
-        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
+        // Re-check population under a transaction to avoid inconsistent reads
+        let recheckedHasCapacity = false;
+        try {
+          const populationServiceLocal = require('../utils/populationService');
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+            await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [cityId]);
+            const prow = await populationServiceLocal.getPopulationByTypeWithClient(client, cityId, bestBuild.bucket || mapBuildingToPopulationBucket(bestBuild.buildingId));
+            const cur = Number(prow.current || 0);
+            const maxv = Number(prow.max || 0);
+            const available = Number(prow.available !== undefined ? prow.available : Math.max(0, maxv - cur));
+            const popNeededForThisBuild = ((bestBuild.reqs && bestBuild.reqs.popForNextLevel) ? Number(bestBuild.reqs.popForNextLevel) : 0) - ((bestBuild.reqs && bestBuild.reqs.currentPopRequirement) ? Number(bestBuild.reqs.currentPopRequirement) : 0);
+            await client.query('COMMIT');
+            recheckedHasCapacity = (available >= popNeededForThisBuild) || (bestBuild.buildingId === 'house' || bestBuild.buildingId.startsWith('casa'));
+            if (!recheckedHasCapacity) logEvent({ type: 'build_decision_skip_recheck', entityId: cityId, reason: 'no_capacity_after_recheck', candidate: bestBuild, recheck: { current: cur, max: maxv, available, popNeededForThisBuild } });
+          } catch (reErr) {
+            try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
+          } finally { try { client.release(); } catch (e) { /* ignore */ } }
+        } catch (e) {
+          // ignore recheck errors — fall back to original decision
+        }
+        if (!recheckedHasCapacity) {
+          logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
+        } else {
+          // allow build to proceed by marking capacity true
+          bestBuild.hasCapacity = true;
+        }
       } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
         logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
       }
     } else {
       if (!bestBuild.hasCapacity) {
-        logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
+        // Re-check population under a transaction to avoid inconsistent reads
+        let recheckedHasCapacity = false;
+        try {
+          const populationServiceLocal = require('../utils/populationService');
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+            await client.query('SELECT id FROM populations WHERE entity_id = $1 FOR UPDATE', [cityId]);
+            const prow = await populationServiceLocal.getPopulationByTypeWithClient(client, cityId, bestBuild.bucket || mapBuildingToPopulationBucket(bestBuild.buildingId));
+            const cur = Number(prow.current || 0);
+            const maxv = Number(prow.max || 0);
+            const available = Number(prow.available !== undefined ? prow.available : Math.max(0, maxv - cur));
+            const popNeededForThisBuild = ((bestBuild.reqs && bestBuild.reqs.popForNextLevel) ? Number(bestBuild.reqs.popForNextLevel) : 0) - ((bestBuild.reqs && bestBuild.reqs.currentPopRequirement) ? Number(bestBuild.reqs.currentPopRequirement) : 0);
+            await client.query('COMMIT');
+            recheckedHasCapacity = (available >= popNeededForThisBuild);
+            if (!recheckedHasCapacity) logEvent({ type: 'build_decision_skip_recheck', entityId: cityId, reason: 'no_capacity_after_recheck', candidate: bestBuild, recheck: { current: cur, max: maxv, available, popNeededForThisBuild } });
+          } catch (reErr) {
+            try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
+          } finally { try { client.release(); } catch (e) { /* ignore */ } }
+        } catch (e) {
+          // ignore recheck errors — fall back to original decision
+        }
+        if (!recheckedHasCapacity) {
+          logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'no_capacity', candidate: bestBuild });
+        } else {
+          // allow build to proceed by marking capacity true
+          bestBuild.hasCapacity = true;
+        }
       } else if (bestBuild.payback > PAYBACK_THRESHOLD) {
         logEvent({ type: 'build_decision_skip', entityId: cityId, reason: 'payback_too_high', payback: bestBuild.payback, threshold: PAYBACK_THRESHOLD, candidate: bestBuild });
       }
