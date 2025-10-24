@@ -175,7 +175,15 @@ router.post('/build', async (req, res) => {
         // If the building consumes population, decrement one unit from the 'poor' bucket by default
         if (buildingType !== 'house') {
             // Decrement one unit from poor bucket and compute available centralised
-            await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.max(0, currPop - 1), maxPop);
+            try {
+                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'poor');
+                const poorMax = Number(prow.max || 0);
+                const newCur = Math.max(1, Math.max(0, currPop - 1));
+                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', newCur, poorMax);
+            } catch (e) {
+                // fallback to previous behavior if per-type query fails
+                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.max(1, Math.max(0, currPop - 1)), maxPop);
+            }
         }
 
         // If new building is one of the special houses, increase the appropriate population max bucket
@@ -212,8 +220,15 @@ router.post('/build', async (req, res) => {
             // Recompute using centralized helper to get latest occupation/available and breakdown
             const newCalc = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
             const newBreak = newCalc.breakdown || {};
-            const newMax = newCalc.max || 0;
-            await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.min(newMax, (newBreak.poor || 0) + 1), newMax);
+            try {
+                const prowNew = await populationService.getPopulationByTypeWithClient(client, entity.id, 'poor');
+                const poorMaxNew = Number(prowNew.max || 0);
+                const newCur = Math.max(1, Math.min(poorMaxNew, (newBreak.poor || 0) + 1));
+                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', newCur, poorMaxNew);
+            } catch (e) {
+                const newMax = newCalc.max || 0;
+                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.max(1, Math.min(newMax, (newBreak.poor || 0) + 1)), newMax);
+            }
         }
         // If the built building is a house, increase poor.max_population
         if (buildingType === 'house') {

@@ -331,9 +331,10 @@ async function processEntity(entityId, options) {
         // Persistir cambios y actualizar last_resource_update
             // Persist new population into populations table (we'll update the 'poor' bucket as a simple default)
             try {
-                const totalMax = popSummary.max || popSummary.total || 0;
+                // Use the per-type max for the 'poor' bucket (avoid passing total max which inflates per-type max)
+                const poorMax = (popMap && popMap.poor && Number.isFinite(Number(popMap.poor.max))) ? Number(popMap.poor.max) : (popSummary.max || 0);
                 // update 'poor' current_population and recompute available_population for that type
-                await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', newPopulation, totalMax);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', newPopulation, poorMax);
             } catch (pErr) {
                 console.warn('Failed to persist population to populations table:', pErr.message);
             }
