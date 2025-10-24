@@ -283,70 +283,87 @@ function findProducerChain(resourceName, options = {}) {
   const currentResources = options.currentResources || {};
   const runtimeBuildings = options.runtimeBuildings || {};
   const calc = options.calc || {};
-  const maxDepth = typeof options.maxDepth === 'number' ? options.maxDepth : 4;
-  const visitedResources = options.visitedResources || new Set();
+  const maxDepthWanted = typeof options.maxDepth === 'number' ? options.maxDepth : 6; // allow deeper searches by default
+  const MAX_HARD_CAP = 10; // absolute hard cap to avoid runaway
+  const maxAttemptDepth = Math.min(MAX_HARD_CAP, Math.max(1, Math.floor(maxDepthWanted)));
 
-  if (maxDepth <= 0) return null;
-  if (visitedResources.has(key)) return null;
-  visitedResources.add(key);
+  // inner recursive search with explicit remaining depth and local visited set
+  function innerSearch(resourceKey, remainingDepth, visited) {
+    if (!resourceKey) return null;
+    const rk = resourceKey.toString().toLowerCase();
+    if (remainingDepth <= 0) return null;
+    if (visited.has(rk)) return null;
+    visited.add(rk);
 
-  // 1) Direct producers
-  const directCandidates = [];
-  for (const [building, rates] of Object.entries(prodRates)) {
-    if (rates && Object.prototype.hasOwnProperty.call(rates, key) && Number(rates[key]) > 0) directCandidates.push(building);
-  }
-  // heuristic expansion: include buildings whose produced resource name partially matches
-  if (directCandidates.length === 0) {
+    // build direct candidate list
+    const directCandidates = [];
     for (const [building, rates] of Object.entries(prodRates)) {
-      if (!rates) continue;
-      for (const produced of Object.keys(rates)) {
-        const p = produced.toString().toLowerCase();
-        if (p.includes(key) || key.includes(p)) {
-          if (!directCandidates.includes(building)) directCandidates.push(building);
+      if (rates && Object.prototype.hasOwnProperty.call(rates, rk) && Number(rates[rk]) > 0) directCandidates.push(building);
+    }
+    if (directCandidates.length === 0) {
+      for (const [building, rates] of Object.entries(prodRates)) {
+        if (!rates) continue;
+        for (const produced of Object.keys(rates)) {
+          const p = produced.toString().toLowerCase();
+          if (p.includes(rk) || rk.includes(p)) {
+            if (!directCandidates.includes(building)) directCandidates.push(building);
+          }
+        }
+        if (building.toString().toLowerCase().includes(rk) && !directCandidates.includes(building)) directCandidates.push(building);
+      }
+    }
+
+    // Try each candidate: either it's directly buildable or we need to resolve its missing inputs
+    for (const candidate of directCandidates) {
+      try {
+        const curLevel = runtimeBuildings[candidate] || 0;
+        const reqs = calculateUpgradeRequirementsFromConstants(candidate, curLevel);
+        if (!reqs) continue;
+        const prodPopNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
+        if ((calc.available || 0) < prodPopNeeded) continue;
+
+        const missing = [];
+        for (const r in reqs.requiredCost) {
+          const needAmt = reqs.requiredCost[r] || 0;
+          const haveAmt = Number(currentResources[r] || 0);
+          if (haveAmt < needAmt) missing.push(r);
+        }
+        if (missing.length === 0) return [candidate];
+
+        // recursively resolve missing inputs
+        for (const m of missing) {
+          const sub = innerSearch(m, remainingDepth - 1, new Set(visited));
+          if (Array.isArray(sub) && sub.length > 0) return sub.concat([candidate]);
+        }
+      } catch (e) {
+        console.warn('[AI v2] innerSearch candidate error for', candidate, e && e.message);
+        continue;
+      }
+    }
+
+    // Try recipes: if resource is a processed product, attempt to resolve its inputs recursively
+    if (recipes && recipes[rk]) {
+      const inputs = Object.keys(recipes[rk] || {});
+      for (const inRes of inputs) {
+        const sub = innerSearch(inRes, remainingDepth - 1, new Set(visited));
+        if (Array.isArray(sub) && sub.length > 0) {
+          for (const [b, rates] of Object.entries(prodRates)) {
+            if (rates && Number(rates[rk]) > 0) return sub.concat([b]);
+          }
         }
       }
-      if (building.toString().toLowerCase().includes(key) && !directCandidates.includes(building)) directCandidates.push(building);
     }
+
+    return null;
   }
 
-  for (const candidate of directCandidates) {
+  // Iterative deepening: increase depth until we find a chain or hit cap
+  for (let depth = 1; depth <= maxAttemptDepth; depth++) {
     try {
-      const curLevel = runtimeBuildings[candidate] || 0;
-      const reqs = calculateUpgradeRequirementsFromConstants(candidate, curLevel);
-      if (!reqs) continue;
-
-      const prodPopNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
-      if ((calc.available || 0) < prodPopNeeded) continue;
-
-      const missing = [];
-      for (const r in reqs.requiredCost) {
-        const needAmt = reqs.requiredCost[r] || 0;
-        const haveAmt = Number(currentResources[r] || 0);
-        if (haveAmt < needAmt) missing.push(r);
-      }
-      if (missing.length === 0) return [candidate];
-
-      for (const m of missing) {
-        const sub = findProducerChain(m, { currentResources, runtimeBuildings, calc, maxDepth: maxDepth - 1, visitedResources });
-        if (Array.isArray(sub) && sub.length > 0) return sub.concat([candidate]);
-      }
+      const result = innerSearch(key, depth, new Set());
+      if (Array.isArray(result) && result.length > 0) return result;
     } catch (e) {
-      console.warn('[AI v2] findProducerChain candidate error for', candidate, e && e.message);
-      continue;
-    }
-  }
-
-  // 2) Try recipes: if resource is a processed product, attempt to resolve its inputs recursively
-  if (recipes && recipes[key]) {
-    const inputs = Object.keys(recipes[key] || {});
-    for (const inRes of inputs) {
-      const sub = findProducerChain(inRes, { currentResources, runtimeBuildings, calc, maxDepth: maxDepth - 1, visitedResources });
-      if (Array.isArray(sub) && sub.length > 0) {
-        // find processor building that produces key
-        for (const [b, rates] of Object.entries(prodRates)) {
-          if (rates && Number(rates[key]) > 0) return sub.concat([b]);
-        }
-      }
+      console.warn('[AI v2] findProducerChain innerSearch failed at depth', depth, e && e.message);
     }
   }
 
