@@ -26,17 +26,17 @@ const { BUILDING_COSTS } = require('../constants/buildings');
 //funcion para calcular el coste de un edificio en funcion de su nivel
 function calculateNextLevelCost(building) {
   const costDef = BUILDING_COSTS[building.type];
-  if (!costDef) return { wood: 0, stone: 0, food: 0 };
+  if (!costDef) return {};
 
-  // Aplicamos el multiplicador por nivel (ejemplo: 1.5 por cada nivel)
+  // Aplicamos el multiplicador por nivel para todas las claves de coste
   const multiplier = 1.5;
   const level = building.level || 0;
-
-  return {
-    wood: Math.ceil(costDef.wood * Math.pow(multiplier, level)),
-    stone: Math.ceil(costDef.stone * Math.pow(multiplier, level)),
-    food: Math.ceil(costDef.food * Math.pow(multiplier, level)),
-  };
+  const out = {};
+  for (const [k, v] of Object.entries(costDef || {})) {
+    if (k === 'popNeeded' || k === 'popneeded' || k === 'pop') continue;
+    out[k.toString().toLowerCase()] = Math.ceil(Number(v || 0) * Math.pow(multiplier, level));
+  }
+  return out;
 }
 
 

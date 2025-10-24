@@ -60,11 +60,14 @@ router.post('/build', async (req, res) => {
 
                 const currentLevel = await getBuildingLevel(entityId, buildingType);
         const factor = 1.7;
-        const cost = {
-            wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
-            stone: Math.ceil(costBase.stone * Math.pow(currentLevel + 1, factor)),
-            food: Math.ceil(costBase.food * Math.pow(currentLevel + 1, factor)),
-        };
+        const nextLevel = currentLevel + 1;
+        // Build cost dynamically from BUILDING_COSTS so all keys (water, leather, etc.) are respected
+        const cost = {};
+        for (const [k, v] of Object.entries(costBase || {})) {
+            if (k === 'popNeeded' || k === 'popneeded' || k === 'pop') continue;
+            const baseVal = Number(v || 0);
+            cost[k.toString().toLowerCase()] = Math.ceil(baseVal * Math.pow(nextLevel, factor));
+        }
 
                 // Check population availability for non-house buildings
                 // Lock the entity row to avoid races when modifying population via entityService
@@ -138,14 +141,14 @@ router.post('/build', async (req, res) => {
             // Use generic consume when building cost uses arbitrary resource keys
             const resourcesService = require('../utils/resourcesService');
             // Map cost object to include only keys with positive amounts
-            const costToUse = Object.fromEntries(Object.entries(cost).filter(([k,v]) => Number(v) > 0));
-            // If cost contains keys other than wood/stone/food, use generic consumer
-            const nonStandard = Object.keys(costToUse).some(k => !['wood','stone','food'].includes(k));
-                if (nonStandard) {
-                    await resourcesService.consumeResourcesWithClientGeneric(client, entityId, costToUse);
-                } else {
-                    await resourcesService.consumeResourcesWithClient(client, entityId, costToUse);
-                }
+            const costToUse = Object.fromEntries(Object.entries(cost).filter(([k, v]) => Number(v) > 0));
+            // If cost contains keys other than wood/stone/food, use generic consumer that handles arbitrary resource keys
+            const nonStandard = Object.keys(costToUse).some(k => !['wood', 'stone', 'food'].includes(k));
+            if (nonStandard) {
+                await resourcesService.consumeResourcesWithClientGeneric(client, entityId, costToUse);
+            } else {
+                await resourcesService.consumeResourcesWithClient(client, entityId, costToUse);
+            }
         } catch (err) {
             if (err && err.code === 'INSUFFICIENT') {
                 await client.query('ROLLBACK');
@@ -335,11 +338,13 @@ router.get('/build/cost', authenticateToken, async (req, res) => {
         const br = await pool.query('SELECT level FROM buildings WHERE entity_id = $1 AND type = $2 LIMIT 1', [targetEntityId, buildingType]);
         const currentLevel = br.rows.length > 0 ? br.rows[0].level : 0;
         const factor = 1.7;
-        const cost = {
-            wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
-            stone: Math.ceil(costBase.stone * Math.pow(currentLevel + 1, factor)),
-            food: Math.ceil(costBase.food * Math.pow(currentLevel + 1, factor)),
-        };
+        const nextLevel = currentLevel + 1;
+        const cost = {};
+        for (const [k, v] of Object.entries(costBase || {})) {
+            if (k === 'popNeeded' || k === 'popneeded' || k === 'pop') continue;
+            const baseVal = Number(v || 0);
+            cost[k.toString().toLowerCase()] = Math.ceil(baseVal * Math.pow(nextLevel, factor));
+        }
 
         // Get current resources via service
         const resources = await require('../utils/resourcesService').getResources(targetEntityId);

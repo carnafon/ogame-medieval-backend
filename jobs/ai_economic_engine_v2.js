@@ -247,11 +247,13 @@ function calculateUpgradeRequirementsFromConstants(buildingType, currentLevel) {
   if (!costBase) return null;
   const factor = 1.7;
   const nextLevel = currentLevel + 1;
-  const requiredCost = {
-    wood: Math.ceil((costBase.wood || 0) * Math.pow(nextLevel, factor)),
-    stone: Math.ceil((costBase.stone || 0) * Math.pow(nextLevel, factor)),
-    food: Math.ceil((costBase.food || 0) * Math.pow(nextLevel, factor)),
-  };
+  // Build requiredCost dynamically from costBase to include non-standard resource keys
+  const requiredCost = {};
+  for (const [k, v] of Object.entries(costBase || {})) {
+    if (k === 'popNeeded' || k === 'popneeded' || k === 'pop') continue;
+    const baseVal = Number(v || 0);
+    requiredCost[k.toString().toLowerCase()] = Math.ceil(baseVal * Math.pow(nextLevel, factor));
+  }
   const popNeeded = typeof costBase.popNeeded === 'number' ? costBase.popNeeded : (buildingType === 'house' ? 0 : 1);
   return {
     nextLevel,
