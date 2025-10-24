@@ -52,6 +52,116 @@ function findProducerForResource(resourceName) {
     return FALLBACK[key] || null;
 }
 
+/**
+ * Busca recursivamente una cadena de edificios que permita producir `resourceName`.
+ * Devuelve un array con el orden de construcción sugerido (primer elemento a construir primero).
+ * - options.currentResources: mapa de inventario actual (para comprobar si un edificio es construible)
+ * - options.runtimeBuildings: niveles actuales por tipo
+ * - options.calc: resultado de populationService.calculateAvailablePopulationWithClient (usa .available)
+ * - options.maxDepth: profundidad máxima de búsqueda (por defecto 4)
+ *
+ * La función evita ciclos usando visitedResources.
+ */
+function findProducerChain(resourceName, options = {}) {
+    if (!resourceName) return null;
+    const key = resourceName.toString().toLowerCase();
+    const prodRates = gameUtils.PRODUCTION_RATES || {};
+    const recipes = gameUtils.PROCESSING_RECIPES || {};
+    const BUILDING_COSTS_LOCAL = BUILDING_COSTS || {};
+
+    const currentResources = options.currentResources || {};
+    const runtimeBuildings = options.runtimeBuildings || {};
+    const calc = options.calc || {};
+    const maxDepth = typeof options.maxDepth === 'number' ? options.maxDepth : 4;
+    const visitedResources = options.visitedResources || new Set();
+
+    if (maxDepth <= 0) return null;
+    if (visitedResources.has(key)) return null;
+    visitedResources.add(key);
+
+    // 1) Direct producers
+    const directCandidates = [];
+    for (const [building, rates] of Object.entries(prodRates)) {
+        if (rates && Object.prototype.hasOwnProperty.call(rates, key) && Number(rates[key]) > 0) directCandidates.push(building);
+    }
+    // fallback map similar to previous helper
+    const FALLBACK = { wood: 'sawmill', stone: 'quarry', food: 'farm', lumber: 'carpinteria', baked_brick: 'fabrica_ladrillos', linen: 'lineria' };
+    if (directCandidates.length === 0 && FALLBACK[key]) directCandidates.push(FALLBACK[key]);
+
+    // Try each candidate: if buildable with currentResources -> return [candidate]
+    // otherwise, try to resolve missing inputs recursively
+    for (const candidate of directCandidates) {
+        try {
+            // avoid missing BUILDING_COSTS entries (cannot reason about cost otherwise)
+            const costBase = BUILDING_COSTS_LOCAL[candidate] || {};
+            const curLevel = runtimeBuildings[candidate] || 0;
+            const reqs = calculateUpgradeRequirementsFromConstants(candidate, curLevel);
+            if (!reqs) continue;
+
+            // population check
+            const prodPopNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
+            if ((calc.available || 0) < prodPopNeeded) {
+                // cannot build this candidate now due to population limits
+                continue;
+            }
+
+            // check which resources are missing for this candidate
+            const missing = [];
+            for (const r in reqs.requiredCost) {
+                const needAmt = reqs.requiredCost[r] || 0;
+                const haveAmt = Number(currentResources[r] || 0);
+                if (haveAmt < needAmt) missing.push(r);
+            }
+
+            if (missing.length === 0) {
+                // Candidate is directly buildable
+                return [candidate];
+            }
+
+            // Otherwise, try to find a producer for one of the missing resources recursively
+            for (const m of missing) {
+                const subChain = findProducerChain(m, {
+                    currentResources,
+                    runtimeBuildings,
+                    calc,
+                    maxDepth: maxDepth - 1,
+                    visitedResources
+                });
+                if (Array.isArray(subChain) && subChain.length > 0) {
+                    // Build chain to satisfy missing resource, then build this candidate
+                    return subChain.concat([candidate]);
+                }
+            }
+        } catch (e) {
+            // ignore candidate errors and try others
+            console.warn('[AI Engine] findProducerChain candidate error for', candidate, e && e.message);
+            continue;
+        }
+    }
+
+    // 2) If no direct candidate, but resource can be produced by processing recipes (try mappings)
+    if (recipes && recipes[key]) {
+        const inputs = Object.keys(recipes[key] || {});
+        for (const inRes of inputs) {
+            const subChain = findProducerChain(inRes, {
+                currentResources,
+                runtimeBuildings,
+                calc,
+                maxDepth: maxDepth - 1,
+                visitedResources
+            });
+            if (Array.isArray(subChain) && subChain.length > 0) {
+                // we still need a building that produces `key` (the processor); try to locate one
+                for (const [b, rates] of Object.entries(prodRates)) {
+                    if (rates && Number(rates[key]) > 0) return subChain.concat([b]);
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
 // Map a building type to which population bucket it consumes: 'poor'|'burgess'|'patrician'
 function mapBuildingToPopulationBucket(buildingType) {
     if (!buildingType) return 'poor';
@@ -264,28 +374,38 @@ async function runEconomicUpdate(pool) {
                                 try {
                                     const missingKeys = Object.keys(missing || {});
                                     if (missingKeys.length > 0) {
-                                        const producer = findProducerForResource(missingKeys[0]);
-                                        if (producer && producer !== bestUpgrade && BUILDING_COSTS[producer]) {
-                                            const prodCurLevel = runtimeBuildings[producer] || 0;
-                                            const prodReqs = calculateUpgradeRequirementsFromConstants(producer, prodCurLevel);
-                                            if (prodReqs) {
-                                                const prodPopNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
-                                                if ((calc.available || 0) >= prodPopNeeded) {
-                                                    let enoughForProducer = true;
-                                                    for (const r in prodReqs.requiredCost) {
-                                                        if ((currentResources[r] || 0) < prodReqs.requiredCost[r]) { enoughForProducer = false; break; }
-                                                    }
-                                                    if (enoughForProducer) {
-                                                        bestUpgrade = producer;
-                                                        lowestLevel = prodCurLevel;
-                                                        reqs.requiredCost = prodReqs.requiredCost;
-                                                        reqs.nextLevel = prodReqs.nextLevel;
-                                                        reqs.popForNextLevel = prodReqs.popForNextLevel;
-                                                        reqs.currentPopRequirement = prodReqs.currentPopRequirement;
-                                                        hasEnough = true;
+                                        // Try to find a chain of producers that can produce the missing resource
+                                        try {
+                                            const chain = findProducerChain(missingKeys[0], { currentResources, runtimeBuildings, calc, maxDepth: 4 });
+                                            if (Array.isArray(chain) && chain.length > 0) {
+                                                // pick the first link in the chain as the immediate building to attempt
+                                                const producer = chain[0];
+                                                console.debug(`[AI Engine] entity=${entityId} producer chain for ${missingKeys[0]} ->`, chain);
+                                                if (producer && producer !== bestUpgrade && BUILDING_COSTS[producer]) {
+                                                    const prodCurLevel = runtimeBuildings[producer] || 0;
+                                                    const prodReqs = calculateUpgradeRequirementsFromConstants(producer, prodCurLevel);
+                                                    if (prodReqs) {
+                                                        const prodPopNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
+                                                        if ((calc.available || 0) >= prodPopNeeded) {
+                                                            let enoughForProducer = true;
+                                                            for (const r in prodReqs.requiredCost) {
+                                                                if ((currentResources[r] || 0) < prodReqs.requiredCost[r]) { enoughForProducer = false; break; }
+                                                            }
+                                                            if (enoughForProducer) {
+                                                                bestUpgrade = producer;
+                                                                lowestLevel = prodCurLevel;
+                                                                reqs.requiredCost = prodReqs.requiredCost;
+                                                                reqs.nextLevel = prodReqs.nextLevel;
+                                                                reqs.popForNextLevel = prodReqs.popForNextLevel;
+                                                                reqs.currentPopRequirement = prodReqs.currentPopRequirement;
+                                                                hasEnough = true;
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
+                                        } catch (pe2) {
+                                            console.warn('[AI Engine] error while selecting producer chain for missing resource', pe2 && pe2.message);
                                         }
                                     }
                                 } catch (pe) {

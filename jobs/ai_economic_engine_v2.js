@@ -799,7 +799,56 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     if (bres && bres.success === false && bres.reason === 'insufficient_resources' && bres.resource) {
       const missing = bres.resource;
       logEvent({ type: 'build_missing_resource', entityId: cityId, missing });
-      // find a candidate that produces the missing resource and has capacity
+      // First: attempt to BUY the missing resource via market even if market price is high
+      try {
+        const wantQty = Number(bres.need || 1) || 1;
+        // Attempt forced buy: find any neighbor with stock > 0 and execute trade
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          let sellerId = null;
+          for (const nb of perception.neighbors || []) {
+            try {
+              const nInv = await resourcesService.getResourcesWithClient(client, nb.id);
+              const sellerStock = Number(nInv && nInv[missing] || 0);
+              if (sellerStock > 0) { sellerId = nb.id; break; }
+            } catch (e) {
+              // ignore per-neighbor failures
+            }
+          }
+          if (sellerId) {
+            const mp = await marketService.computeMarketPriceSingle(client, missing, wantQty, 'buy');
+            if (mp && typeof mp.price !== 'undefined') {
+              try {
+                const snapshot = await marketService.tradeWithClient(client, perception.entityId, sellerId, missing, mp.price, wantQty);
+                await client.query('COMMIT');
+                recordMetric('actionsExecuted', 1); recordMetric('successfulTrades', 1);
+                logEvent({ type: 'forced_buy', entityId: perception.entityId, missing, qty: wantQty, price: mp.price, sellerId });
+                execResults.push({ action: { type: 'forced_buy', resource: missing, qty: wantQty }, success: true, snapshot });
+                // success — clear missing from AI memory and return early
+                try { clearMissingResourcesFromMemory(perception.entityId, [missing]); } catch (e) {}
+                return { success: true, cityId, acted: true, results: execResults };
+              } catch (tradeErr) {
+                try { await client.query('ROLLBACK'); } catch (e) {}
+                logEvent({ type: 'forced_buy_failed_trade', entityId: perception.entityId, missing, err: tradeErr && tradeErr.message });
+              }
+            } else {
+              await client.query('ROLLBACK');
+            }
+          } else {
+            await client.query('ROLLBACK');
+          }
+        } catch (e) {
+          try { await client.query('ROLLBACK'); } catch (er) {}
+        } finally {
+          try { client.release(); } catch (er) {}
+        }
+      } catch (e) {
+        // ignore forced-buy errors and fall back to existing alt-build logic
+        logEvent({ type: 'forced_buy_error', entityId: perception.entityId, missing, err: e && e.message });
+      }
+
+      // If forced buy didn't succeed, find a candidate that produces the missing resource and has capacity
       const alt = (buildCandidates || []).find(c => c.produces && c.produces.includes(missing) && c.hasCapacity);
       if (alt) {
         logEvent({ type: 'build_try_alternative', entityId: cityId, original: bestBuild.buildingId, alternative: alt.buildingId, missing });
