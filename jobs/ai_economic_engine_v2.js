@@ -589,6 +589,58 @@ async function buildPlanner(perception, pool, opts = {}) {
     candidates.push({ buildingId, currentLevel, reqs, costGold, valueSum: rawValueSum, adjustedValueSum, payback, bucket, hasCapacity, perTypeMax, perTypeAvailable, hasEnoughPopSlots, produces, primaryProduce, priorityBoost });
   }
 
+    // --- Category-first deficit filtering ---
+    try {
+      const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
+      const categoryMap = gameUtils.RESOURCE_CATEGORIES || {};
+      function resourceBucketForResource(r) {
+        const cat = categoryMap[r] || null;
+        if (cat === 'common') return 'poor';
+        if (cat === 'processed') return 'burgess';
+        if (cat === 'specialized') return 'patrician';
+        return null;
+      }
+
+      // compute production per tick (already computed earlier as productionPerTick)
+      const prodPerTickForCheck = productionPerTick || gameUtils.calculateProduction(buildingRows, populationStats) || {};
+
+      // build resource key set to inspect: union of production keys and inventory keys
+      const keys = new Set([...(Object.keys(prodPerTickForCheck || {})), ...(Object.keys(perception.inventory || {}))]);
+
+      const deficitsByBucket = { poor: new Set(), burgess: new Set(), patrician: new Set() };
+      for (const res of keys) {
+        if (!res || res === 'gold') continue;
+        const cur = Number(perception.inventory[res] || 0);
+        const net = Number(prodPerTickForCheck[res] || 0);
+        if (net < 0 || cur < SAFETY) {
+          const bk = resourceBucketForResource(res);
+          if (bk) deficitsByBucket[bk].add(res);
+        }
+      }
+
+      // decide which category to enforce: poor -> burgess -> patrician
+      let enforcedBucket = null;
+      if (deficitsByBucket.poor.size > 0) enforcedBucket = 'poor';
+      else if (deficitsByBucket.burgess.size > 0) enforcedBucket = 'burgess';
+      else if (deficitsByBucket.patrician.size > 0) enforcedBucket = 'patrician';
+
+      if (enforcedBucket) {
+        const filteredByCategory = candidates.filter(c => c.bucket === enforcedBucket);
+        if (filteredByCategory && filteredByCategory.length > 0) {
+          logEvent({ type: 'build_planner_category_filter', entityId, enforcedBucket, deficits: Array.from(deficitsByBucket[enforcedBucket]) });
+          // replace candidates with category-limited set to force planner to focus on that tier
+          candidates.length = 0;
+          filteredByCategory.forEach(x => candidates.push(x));
+        } else {
+          // no direct candidates in this bucket; log and fall back to original candidates
+          logEvent({ type: 'build_planner_category_filter_no_candidates', entityId, enforcedBucket, deficits: Array.from(deficitsByBucket[enforcedBucket]) });
+        }
+      }
+    } catch (e) {
+      // if anything fails here, don't block the planner; fallback to normal behavior
+      logEvent({ type: 'build_planner_category_filter_error', entityId, err: e && e.message });
+    }
+
   // Filter out candidates that explicitly require population slots we don't have (unless they are house types)
   const filteredCandidates = candidates.filter(c => {
     const isHouseTypeLocal = c.buildingId === 'house' || c.buildingId.startsWith('casa') || c.buildingId.startsWith('house');
