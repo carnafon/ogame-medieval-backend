@@ -129,6 +129,45 @@ router.post('/register', async (req, res) => {
             } catch (aiErr) {
               console.warn('Error creando ciudades IA al registrar usuario:', aiErr && aiErr.message ? aiErr.message : aiErr);
             }
+                // 6️⃣ If this is the very first player registered, create NPC bazaars near each faction
+                try {
+                  // Count players (users) to determine if this is the first registration
+                  const usersCountRes = await pool.query('SELECT COUNT(*)::int AS c FROM users');
+                  const usersCount = parseInt(usersCountRes.rows[0].c || '0', 10);
+                  if (usersCount === 1) {
+                    // create one npc_bazar per faction (reusing findAvailableCoordinates)
+                    const factionsAll = await pool.query('SELECT id, name FROM factions');
+                    const { createEntityWithResources } = require('../utils/entityService');
+                    const resourcesService = require('../utils/resourcesService');
+                    const resourceTypes = await resourcesService.getResourceTypes();
+                    // build initialResources map with 100000 of each resource
+                    const bigStock = {};
+                    for (const r of resourceTypes) {
+                      const name = (r.name || '').toLowerCase();
+                      bigStock[name] = 100000;
+                    }
+
+                    for (const f of factionsAll.rows) {
+                      try {
+                        const coords = await findAvailableCoordinates(pool, f.id);
+                        await createEntityWithResources(pool, {
+                          user_id: null,
+                          faction_id: f.id,
+                          type: 'npc_bazar',
+                          x_coord: coords.x,
+                          y_coord: coords.y,
+                          population: 0,
+                          initialResources: bigStock
+                        });
+                        console.info(`NPC bazar creado para facción ${f.name} en (${coords.x}, ${coords.y})`);
+                      } catch (bazErr) {
+                        console.warn('Error creando npc_bazar para facción', f.id, bazErr && bazErr.message ? bazErr.message : bazErr);
+                      }
+                    }
+                  }
+                } catch (bazAllErr) {
+                  console.warn('Error comprobando/creando npc_bazar al registrar usuario:', bazAllErr && bazAllErr.message ? bazAllErr.message : bazAllErr);
+                }
         } catch (entityErr) {
             // Cleanup: delete user to avoid orphaned users if entity creation fails
             try {

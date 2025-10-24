@@ -63,12 +63,25 @@ router.get('/types', async (req, res) => {
 // Returns computed market price per trade based on global stock and price_base.
 router.post('/market-price', async (req, res) => {
   try {
-    const { trades } = req.body || {};
+    // Optional: caller may provide a global buyerId/sellerId to compute bazaar-specific prices
+    const { trades, sellerId: globalSellerId, buyerId: globalBuyerId } = req.body || {};
     if (!Array.isArray(trades) || trades.length === 0) {
       return res.status(400).json({ message: 'Debe enviar un array trades con al menos un elemento.' });
     }
 
     const results = [];
+    const entityService = require('../utils/entityService');
+
+    // Resolve global participant types if provided (may be null)
+    let globalSeller = null;
+    let globalBuyer = null;
+    try {
+      if (globalSellerId) globalSeller = await entityService.getEntityById(pool, globalSellerId);
+    } catch (e) { /* ignore */ }
+    try {
+      if (globalBuyerId) globalBuyer = await entityService.getEntityById(pool, globalBuyerId);
+    } catch (e) { /* ignore */ }
+
     for (const tr of trades) {
       const type = (tr.type || '').toString().toLowerCase();
       const amount = Math.max(0, parseInt(tr.amount || 0, 10));
@@ -79,6 +92,14 @@ router.post('/market-price', async (req, res) => {
         continue;
       }
 
+      // Per-trade participant override takes precedence over global
+      const sellerId = tr.sellerId || globalSellerId;
+      const buyerId = tr.buyerId || globalBuyerId;
+      let sellerEntity = sellerId ? null : null;
+      let buyerEntity = buyerId ? null : null;
+      try { if (sellerId) sellerEntity = await entityService.getEntityById(pool, sellerId); } catch (e) { /* ignore */ }
+      try { if (buyerId) buyerEntity = await entityService.getEntityById(pool, buyerId); } catch (e) { /* ignore */ }
+
       // Use marketService to compute price and stock
       const mp = await marketService.computeMarketPriceSingle(pool, type, amount, action);
       if (!mp) {
@@ -87,8 +108,19 @@ router.post('/market-price', async (req, res) => {
         continue;
       }
 
-  const stockAfter = action === 'buy' ? Math.max(0, mp.stockBefore - amount) : mp.stockBefore + amount;
-  results.push({ type, amount, action, base_price: mp.base, price: mp.price, stock_before: mp.stockBefore, stock_after: stockAfter });
+      let finalPrice = mp.price;
+      const base = Number(mp.base || 0);
+      // If seller is an npc_bazar -> seller sells to player -> player buys at 1.1 * base
+      if (sellerEntity && sellerEntity.type === 'npc_bazar') {
+        if (base > 0) finalPrice = Math.max(1, Math.round(base * 1.1));
+      }
+      // If buyer is an npc_bazar -> npc buys from player -> npc pays 0.9 * base
+      if (buyerEntity && buyerEntity.type === 'npc_bazar') {
+        if (base > 0) finalPrice = Math.max(1, Math.round(base * 0.9));
+      }
+
+      const stockAfter = action === 'buy' ? Math.max(0, mp.stockBefore - amount) : mp.stockBefore + amount;
+      results.push({ type, amount, action, base_price: mp.base, price: finalPrice, stock_before: mp.stockBefore, stock_after: stockAfter });
     }
 
     res.json({ results });
@@ -123,10 +155,27 @@ router.post('/trade', authenticateToken, async (req, res) => {
     if (!goldRt) { await client.query('ROLLBACK'); return res.status(500).json({ message: 'Tipo de recurso "gold" no encontrado en la base de datos.' }); }
     const goldTypeId = goldRt.id;
 
+    // If one of the participants is an npc_bazar, enforce their buy/sell multipliers
+    const entityService = require('../utils/entityService');
+    const sellerEntity = await entityService.getEntityById(client, sellerId);
+    const buyerEntity = await entityService.getEntityById(client, buyerId);
+
+    let finalPrice = Number(price);
+    // Compute base price via marketService to derive multipliers
+    const mp = await marketService.computeMarketPriceSingle(client, resource.toString().toLowerCase(), qty, 'buy');
+    const basePrice = mp && mp.base ? Number(mp.base) : null;
+    if (sellerEntity && sellerEntity.type === 'npc_bazar') {
+      // Seller is NPC bazar: player is buying from NPC -> NPC sells at 1.1 * base
+      if (basePrice !== null) finalPrice = Math.max(1, Math.round(basePrice * 1.1));
+    } else if (buyerEntity && buyerEntity.type === 'npc_bazar') {
+      // Buyer is NPC bazar: NPC buys from player -> NPC pays 0.9 * base
+      if (basePrice !== null) finalPrice = Math.max(1, Math.round(basePrice * 0.9));
+    }
+
     // Lock buyer and seller inventory rows for the two resource types (resource and gold)
     // We lock all inventory rows for both entities to simplify and avoid deadlocks ordering issues by always locking in entity id order
     // Use marketService.tradeWithClient which now uses resourcesService internally
-    const snapshot = await marketService.tradeWithClient(client, buyerId, sellerId, resource, price, qty);
+    const snapshot = await marketService.tradeWithClient(client, buyerId, sellerId, resource, finalPrice, qty);
     await client.query('COMMIT');
     res.json({ message: 'Trade ejecutado correctamente', buyerId: Number(buyerId), sellerId: Number(sellerId), resource: resource.toString().toLowerCase(), price: Number(price), amount: qty, snapshot });
   } catch (err) {
