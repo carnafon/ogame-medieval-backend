@@ -19,7 +19,8 @@ async function initPopulations(clientOrPool, entityId, distribution = null) {
 
     for (const t of POP_TYPES) {
       const cur = typeof dist[t] === 'number' ? dist[t] : 0;
-      const max = cur; // default max equals initial current unless caller provides different logic
+      // Ensure base max population for each bucket is at least 1 when initializing
+      const max = Math.max(1, cur);
       const avail = Math.max(0, max - cur);
       await client.query(
         `INSERT INTO populations (entity_id, type, current_population, max_population, available_population)
