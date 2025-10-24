@@ -50,9 +50,10 @@ async function createEntityWithResources(clientOrPool, data) {
   const rt = await resourcesService.getResourceTypesWithClient(client);
   // Prepare initial resources. Ensure players and AI cities start with 3000 gold by default.
   const initial = Object.assign({}, data.initialResources || {});
-  const entType = (data.type || 'player').toString();
-  if (entType === 'player' || entType === 'cityIA' || entType === 'cityIa' || entType === 'cityia') {
-    if (typeof initial.gold !== 'number') initial.gold = 3000;
+  const entType = (data.type || 'player').toString().toLowerCase();
+  if (entType === 'player' || entType === 'cityia') {
+    // Ensure players and AI cities start with 3000 gold unless an explicit positive value was provided
+    if (!(typeof initial.gold === 'number' && initial.gold > 0)) initial.gold = 3000;
   }
   for (const r of rt) {
     const name = (r.name || '').toLowerCase();
