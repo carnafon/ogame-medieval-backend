@@ -56,16 +56,16 @@ async function createPairedCity(clientOrPool, cityData) {
     if (!initialResources || Object.keys(initialResources).length === 0) {
         // Balanced defaults for AI cities (small starting push)
         const aiDefaults = {
-            wood: 80,
-            stone: 70,
-            food: 120,
-            water: 20,
-            coal: 10,
-            clay: 10,
-            honey: 4,
-            wool: 4,
-            copper: 8,
-            leather: 4
+            wood: 800,
+            stone: 700,
+            food: 1200,
+            water: 200,
+            coal: 100,
+            clay: 100,
+            honey: 400,
+            wool: 400,
+            copper: 800,
+            leather: 400
         };
         const resourcesService = require('./resourcesService');
         const rtRes = await resourcesService.getResourceTypesWithClient(client);

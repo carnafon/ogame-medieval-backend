@@ -81,16 +81,16 @@ router.post('/register', async (req, res) => {
         const resourceTypes = await resourcesService.getResourceTypes();
         // Balanced starter defaults for human player
         const playerDefaults = {
-          wood: 140,
-          stone: 120,
-          food: 200,
-          water: 40,
-          coal: 30,
-          clay: 30,
-          honey: 10,
-          wool: 10,
-          copper: 20,
-          leather: 10
+          wood: 1400,
+          stone: 1200,
+          food: 2000,
+          water: 400,
+          coal: 300,
+          clay: 300,
+          honey: 100,
+          wool: 100,
+          copper: 200,
+          leather: 100
         };
         const defaults = {};
         for (const r of resourceTypes) {
