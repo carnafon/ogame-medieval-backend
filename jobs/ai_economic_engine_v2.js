@@ -1095,7 +1095,37 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
         const row = await populationServiceLocal.getPopulationByTypeWithClient(client, entityId, bucketToCheck);
         const cur = Number(row.current || 0);
         const maxv = Number(row.max || 0);
-        return cur === maxv;
+        // If current != max, building a house for this bucket is not needed
+        if (cur !== maxv) return false;
+
+        // Additional rule: only allow building the house if the city's net
+        // production for common (poor) resources is positive (>0). Compute
+        // current production per tick using buildings and population snapshot.
+        try {
+          const gameUtilsLocal = require('../utils/gameUtils');
+          const bRows = await getBuildings(entityId);
+          // obtain total current population across buckets using populationService with client
+          let totalPop = 0;
+          try {
+            const popRows = await populationServiceLocal.getPopulationRowsWithClient(client, entityId);
+            for (const k of Object.keys(popRows || {})) totalPop += Number(popRows[k].current || 0);
+          } catch (e) { totalPop = 0; }
+
+          const prodPerTick = gameUtilsLocal.calculateProduction(bRows, { current_population: totalPop }) || {};
+          const cats = gameUtilsLocal.RESOURCE_CATEGORIES || {};
+          // Sum net production for all common resources
+          let totalCommonNet = 0;
+          for (const r of Object.keys(cats)) {
+            if (cats[r] === 'common') {
+              totalCommonNet += Number(prodPerTick[r] || 0);
+            }
+          }
+          // Only allow house build if total common net production is > 0
+          return totalCommonNet > 0;
+        } catch (e) {
+          // On error computing production, be conservative and disallow the house build
+          return false;
+        }
       } finally {
         client.release();
       }
