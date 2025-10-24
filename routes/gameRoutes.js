@@ -40,9 +40,13 @@ router.get('/game/constants', async (req, res) => {
 router.post('/build', async (req, res) => {
     
     const userId = req.user.id; 
-    const { buildingType,entity } = req.body; 
-    console.debug(`build request from user ${userId}:`, req.body);
-    console.debug(`Entity : ${entity.id}, Building Type: ${buildingType}`);
+    const { buildingType } = req.body; 
+    // Always resolve the entity server-side from the authenticated user to avoid clients forging entity ids
+    const entityService = require('../utils/entityService');
+    const userEntity = await entityService.getEntityByUserId(pool, userId);
+    if (!userEntity) return res.status(404).json({ message: 'No entity associated with user.' });
+    const entityId = userEntity.id;
+    console.debug(`build request from user ${userId}, entity ${entityId}, buildingType: ${buildingType}`);
 
     const costBase = BUILDING_COSTS[buildingType];
     if (!costBase) {
@@ -54,7 +58,7 @@ router.post('/build', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-                const currentLevel = await getBuildingLevel(entity.id, buildingType);
+                const currentLevel = await getBuildingLevel(entityId, buildingType);
         const factor = 1.7;
         const cost = {
             wood: Math.ceil(costBase.wood * Math.pow(currentLevel + 1, factor)),
@@ -65,7 +69,7 @@ router.post('/build', async (req, res) => {
                 // Check population availability for non-house buildings
                 // Lock the entity row to avoid races when modifying population via entityService
                 try {
-                    await entityService.lockEntity(client, entity.id);
+                    await entityService.lockEntity(client, entityId);
                 } catch (e) {
                     await client.query('ROLLBACK');
                     return res.status(404).json({ message: 'Entidad no encontrada.' });
@@ -73,7 +77,7 @@ router.post('/build', async (req, res) => {
                 // Determine faction name (if any) for permission checks
                 let factionName = null;
                 try {
-                    const er = await entityService.getEntityById(client, entity.id, false);
+                    const er = await entityService.getEntityById(client, entityId, false);
                     const fid = er && er.faction_id;
                     if (fid) {
                         const fnr = await client.query('SELECT name FROM factions WHERE id = $1 LIMIT 1', [fid]);
@@ -101,7 +105,7 @@ router.post('/build', async (req, res) => {
                 // `current_population` is the available (free) population.
                 const populationService = require('../utils/populationService');
                 // Use centralized helper inside the transaction to compute occupation/available
-                const popCalc = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
+                const popCalc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
                 const currPop = popCalc.total || 0;
                 const maxPop = popCalc.max || 0;
 
@@ -120,14 +124,14 @@ router.post('/build', async (req, res) => {
                     }
                 }
 
-        // Consume resources within this same transaction
+                // Consume resources within this same transaction
         try {
             // Debug: log current resources before attempting to consume
                 try {
                     // Read current resources via resourcesService for debug only
                     const resourcesService = require('../utils/resourcesService');
-                    const curObj = await resourcesService.getResourcesWithClient(client, entity.id);
-                    console.debug(`Current resources for entity ${entity.id}:`, curObj);
+                        const curObj = await resourcesService.getResourcesWithClient(client, entityId);
+                    console.debug(`Current resources for entity ${entityId}:`, curObj);
                 } catch (logErr) {
                     console.warn('Failed to read current resources for logging:', logErr.message);
                 }
@@ -137,16 +141,16 @@ router.post('/build', async (req, res) => {
             const costToUse = Object.fromEntries(Object.entries(cost).filter(([k,v]) => Number(v) > 0));
             // If cost contains keys other than wood/stone/food, use generic consumer
             const nonStandard = Object.keys(costToUse).some(k => !['wood','stone','food'].includes(k));
-            if (nonStandard) {
-                await resourcesService.consumeResourcesWithClientGeneric(client, entity.id, costToUse);
-            } else {
-                await resourcesService.consumeResourcesWithClient(client, entity.id, costToUse);
-            }
+                if (nonStandard) {
+                    await resourcesService.consumeResourcesWithClientGeneric(client, entityId, costToUse);
+                } else {
+                    await resourcesService.consumeResourcesWithClient(client, entityId, costToUse);
+                }
         } catch (err) {
             if (err && err.code === 'INSUFFICIENT') {
                 await client.query('ROLLBACK');
                 // Log detailed info for debugging
-                console.warn(`INSUFFICIENT resources for entity ${entity.id}:`, {
+                console.warn(`INSUFFICIENT resources for entity ${entityId}:`, {
                     resource: err.resource || null,
                     need: err.need || null,
                     have: err.have || null,
@@ -165,69 +169,70 @@ router.post('/build', async (req, res) => {
         }
 
         // 5️⃣ Incrementar nivel o crear edificio (centralizado)
-        const { incrementBuildingLevelWithClient } = require('../utils/buildingsService');
-        await incrementBuildingLevelWithClient(client, entity.id, buildingType);
+    const { incrementBuildingLevelWithClient } = require('../utils/buildingsService');
+    await incrementBuildingLevelWithClient(client, entityId, buildingType);
 
         // 5️⃣ Obtener edificios actualizados
-        const updatedBuildings = await getBuildings(entity.id);
+    const updatedBuildings = await getBuildings(entityId);
 
 
         // If the building consumes population, decrement one unit from the 'poor' bucket by default
         if (buildingType !== 'house') {
             // Decrement one unit from poor bucket and compute available centralised
             try {
-                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'poor');
+                const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'poor');
                 const poorMax = Number(prow.max || 0);
-                const newCur = Math.max(1, Math.max(0, currPop - 1));
-                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', newCur, poorMax);
+                // Decrement actual poor.current by one (but never persist below 1)
+                const newCur = Math.max(1, Math.max(0, Number(prow.current || 0) - 1));
+                await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', newCur, poorMax);
             } catch (e) {
                 // fallback to previous behavior if per-type query fails
-                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.max(1, Math.max(0, currPop - 1)), maxPop);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', Math.max(1, Math.max(0, currPop - 1)), maxPop);
             }
         }
 
         // If new building is one of the special houses, increase the appropriate population max bucket
         try {
-            if (buildingType === 'casa_de_piedra') {
+                if (buildingType === 'casa_de_piedra') {
                 const gu = require('../utils/gameUtils');
                 const inc = gu.POPULATION_PER_HOUSE || 5;
-                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'burgess');
+                const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'burgess');
                 const cur = Number(prow.current || 0);
                 const maxv = Number(prow.max || 0) + inc;
                 const avail = Math.max(0, maxv - cur);
-                await populationService.setPopulationForTypeWithClient(client, entity.id, 'burgess', cur, maxv, avail);
+                await populationService.setPopulationForTypeWithClient(client, entityId, 'burgess', cur, maxv, avail);
             } else if (buildingType === 'casa_de_ladrillos') {
                 const gu = require('../utils/gameUtils');
                 const inc = gu.POPULATION_PER_HOUSE || 5;
-                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'patrician');
+                const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'patrician');
                 const cur = Number(prow.current || 0);
                 const maxv = Number(prow.max || 0) + inc;
                 const avail = Math.max(0, maxv - cur);
-                await populationService.setPopulationForTypeWithClient(client, entity.id, 'patrician', cur, maxv, avail);
+                await populationService.setPopulationForTypeWithClient(client, entityId, 'patrician', cur, maxv, avail);
             }
         } catch (e) {
             console.warn('Failed to update special house population buckets:', e.message);
         }
 
     // 6️⃣ Obtener entidad actualizada (población, recursos) via entityService
-    const updatedEntity = await entityService.getEntityById(client, entity.id, false);
+    const updatedEntity = await entityService.getEntityById(client, entityId, false);
 
         // Obtener recursos actualizados via resourcesService
-        const updatedResources = await require('../utils/resourcesService').getResourcesWithClient(client, entity.id);
+    const updatedResources = await require('../utils/resourcesService').getResourcesWithClient(client, entityId);
 
         // If the building consumes population, increment back (release) one unit to 'poor' bucket
         if (buildingType !== 'house') {
             // Recompute using centralized helper to get latest occupation/available and breakdown
-            const newCalc = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
+            const newCalc = await populationService.calculateAvailablePopulationWithClient(client, entityId);
             const newBreak = newCalc.breakdown || {};
             try {
-                const prowNew = await populationService.getPopulationByTypeWithClient(client, entity.id, 'poor');
+                const prowNew = await populationService.getPopulationByTypeWithClient(client, entityId, 'poor');
                 const poorMaxNew = Number(prowNew.max || 0);
                 const newCur = Math.max(1, Math.min(poorMaxNew, (newBreak.poor || 0) + 1));
-                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', newCur, poorMaxNew);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', newCur, poorMaxNew);
             } catch (e) {
                 const newMax = newCalc.max || 0;
-                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', Math.max(1, Math.min(newMax, (newBreak.poor || 0) + 1)), newMax);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', Math.max(1, Math.min(newMax, (newBreak.poor || 0) + 1)), newMax);
             }
         }
         // If the built building is a house, increase poor.max_population
@@ -235,17 +240,17 @@ router.post('/build', async (req, res) => {
             try {
                 const gu = require('../utils/gameUtils');
                 const inc = gu.POPULATION_PER_HOUSE || 5;
-                const prow = await populationService.getPopulationByTypeWithClient(client, entity.id, 'poor');
+                const prow = await populationService.getPopulationByTypeWithClient(client, entityId, 'poor');
                 const cur = Number(prow.current || 0);
                 const maxv = Number(prow.max || 0) + inc;
-                await populationService.setPopulationForTypeComputedWithClient(client, entity.id, 'poor', cur, maxv);
+                await populationService.setPopulationForTypeComputedWithClient(client, entityId, 'poor', cur, maxv);
             } catch (e) {
                 console.warn('Failed to update house population bucket (poor):', e.message);
             }
         }
 
         // recompute popSummary for response (centralized helper) inside the transaction
-        const finalPopSummary = await populationService.calculateAvailablePopulationWithClient(client, entity.id);
+        const finalPopSummary = await populationService.calculateAvailablePopulationWithClient(client, entityId);
 
         await client.query('COMMIT');
 

@@ -37,7 +37,7 @@ const BUILDING_COSTS = {
   escriba: { wood: 20, stone: 10, books: 5, popNeeded: 1 },
   artificiero: { wood: 45, stone: 30, salted: 15, popNeeded: 1 },
   herreria_real: { wood: 60, stone: 50, iron_ingot: 15, popNeeded: 1 },
-  lineria: { wood: 30, stone: 20, beer: 8, popNeeded: 1 },
+  lineria: { wood: 30, stone: 20, beer: 80, popNeeded: 1 },
 
   // Strategic / late-game
   tintoreria_dorada: { wood: 60, stone: 40, royal_dye: 10, popNeeded: 1 },
