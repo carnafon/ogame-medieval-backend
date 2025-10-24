@@ -857,6 +857,79 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
           }
         }
 
+        // If there are deficits in 'poor' resources, apply hybrid policy:
+        // 1) If rejectedDueToPopCount > 0 and there is a houseCandidate -> attempt house first
+        // 2) Otherwise, attempt to find a producer chain for the poor resources and try to build the first element
+        const poorDeficit = (deficits.poor || new Set());
+        if (poorDeficit.size > 0) {
+          try {
+            const rejectedN = (buildPlannerResult && buildPlannerResult.rejectedDueToPopCount) || 0;
+            const houseCand = (buildPlannerResult && buildPlannerResult.houseCandidate) || null;
+            if (rejectedN > 0 && houseCand) {
+              logEvent({ type: 'build_attempt_house_due_to_poor_deficit', entityId, reason: 'poor_deficit_and_no_pop_slots', poorDeficit: Array.from(poorDeficit), rejectedN, house: houseCand.buildingId });
+              try {
+                const hres = await executeBuildAction(pool, houseCand, perception, {});
+                execResults.push({ action: { type: 'build', building: houseCand.buildingId }, result: hres });
+                if (hres && hres.success) {
+                  return { success: true, cityId, acted: true, results: execResults };
+                }
+              } catch (e) {
+                logEvent({ type: 'build_attempt_house_failed', entityId, err: e && e.message });
+              }
+            }
+
+            // If we didn't build a house, try to resolve poor deficits via producer chains
+            // Build runtime map and population calc snapshot
+            const bRowsForChain = await getBuildings(perception.entityId);
+            const runtimeBuildingsForChain = {};
+            bRowsForChain.forEach(b => { runtimeBuildingsForChain[b.type] = b.level || 0; });
+            let calc = {};
+            try { calc = await populationService.calculateAvailablePopulation(perception.entityId); } catch (e) { calc = {}; }
+
+            for (const res of Array.from(poorDeficit)) {
+              try {
+                const chain = findProducerChain(res, { currentResources: perception.inventory || {}, runtimeBuildings: runtimeBuildingsForChain, calc, maxDepth: opts.maxDepth || 4 });
+                if (Array.isArray(chain) && chain.length > 0) {
+                  const first = chain[0];
+                  logEvent({ type: 'build_producer_chain_found_poor', entityId, missing: res, chain });
+                  // try to locate a matching candidate from planner results
+                  let alt = (buildCandidates || []).find(c => c.buildingId === first && c.hasCapacity);
+                  if (!alt) {
+                    const curLevel = runtimeBuildingsForChain[first] || 0;
+                    const prodReqs = calculateUpgradeRequirementsFromConstants(first, curLevel);
+                    if (prodReqs) {
+                      // basic population availability check
+                      const bucket = mapBuildingToPopulationBucket(first);
+                      let perTypeRow = null;
+                      try {
+                        const tmpClient = await pool.connect();
+                        try {
+                          perTypeRow = await populationService.getPopulationByTypeWithClient(tmpClient, perception.entityId, bucket);
+                        } finally { tmpClient.release(); }
+                      } catch (e) { perTypeRow = null; }
+                      const perTypeAvailable = perTypeRow ? Number(perTypeRow.available || Math.max(0, Number(perTypeRow.max || 0) - Number(perTypeRow.current || 0))) : Infinity;
+                      const popNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
+                      const hasCapacity = (perTypeAvailable === Infinity) ? true : (perTypeAvailable >= popNeeded);
+                      alt = { buildingId: first, reqs: prodReqs, hasCapacity, produces: Object.keys((gameUtils.PRODUCTION_RATES || {})[first] || {}) };
+                    }
+                  }
+                  if (alt) {
+                    logEvent({ type: 'build_try_alternative_chain_poor', entityId: cityId, alternative: alt.buildingId, missing: res, chain });
+                    const ares = await executeBuildAction(pool, alt, perception, {});
+                    execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
+                    if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
+                  }
+                }
+              } catch (chainErr) {
+                logEvent({ type: 'build_producer_chain_error_poor', entityId, missing: res, err: chainErr && chainErr.message });
+              }
+            }
+          } catch (e) {
+            // ignore and fallback to normal bucket selection
+            logEvent({ type: 'build_poor_deficit_handling_error', entityId, err: e && e.message });
+          }
+        }
+
         // choose candidate by bucket priority
         const bucketOrder = [ 'poor', 'burgess', 'patrician' ];
         for (const bk of bucketOrder) {
