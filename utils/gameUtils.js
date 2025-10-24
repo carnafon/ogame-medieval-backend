@@ -107,7 +107,7 @@ const RESOURCE_CATEGORIES = {
     // specialized
     spice: 'specialized', damascus_steel: 'specialized', preservation_elixir: 'specialized', explosive_compound: 'specialized', royal_dye: 'specialized', illustrated_parchment: 'specialized', magic_catalyst: 'specialized',
     // strategic + special categories (treat strategic as specialized for AI/category logic)
-    rare_iron: 'specialized', sea_salt: 'specialized', linen: 'specialized', gold_dye: 'specialized', sulfur: 'specialized', precious_gems: 'specialized', silk: 'specialized',
+    rare_iron: 'specialized', sea_salt: 'specialized', linen: 'specialized', gold_dye: 'specialized', sulfur: 'specialized', precious_gems: 'specialized', gems: 'specialized', silk: 'specialized',
     // Gold is its own category to allow special UI handling
     gold: 'gold'
 };
