@@ -1129,16 +1129,37 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
       const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
       // find resources with projected deficit or below safety
       const urgentResources = [];
+      // compute production per tick using real population snapshot (not 0)
+      let prodSnapshot = {};
+      try {
+        const bRowsForUrgent = await getBuildings(perception.entityId);
+        // sum current population across buckets
+        let totalPopUrg = 0;
+        try {
+          const popRowsUrg = await populationService.getPopulationRowsWithClient(pool, perception.entityId);
+          for (const k of Object.keys(popRowsUrg || {})) totalPopUrg += Number(popRowsUrg[k].current || 0);
+        } catch (e) { totalPopUrg = 0; }
+        prodSnapshot = gameUtils.calculateProduction(bRowsForUrgent, { current_population: totalPopUrg }) || {};
+      } catch (e) { prodSnapshot = {}; }
+
       for (const r of Object.keys(perception.inventory || {})) {
         if (r === 'gold') continue;
         const cur = Number(perception.inventory[r] || 0);
-        const netPerTick = Number((gameUtils.calculateProduction(await getBuildings(perception.entityId), { current_population: 0 })[r]) || 0);
+        const netPerTick = Number(prodSnapshot[r] || 0);
         if (netPerTick < 0) urgentResources.push(r);
         else if (cur < SAFETY) urgentResources.push(r);
       }
       if (urgentResources.length > 0) {
         // look for a candidate producing any urgent resource and with capacity
-        const alt = (buildCandidates || []).find(c => c.hasCapacity && c.produces && c.produces.some(p => urgentResources.includes(p)));
+        // Prefer candidates in the same population bucket as the bestBuild (avoid jumping buckets unexpectedly)
+        const bucketPref = (bestBuild && bestBuild.bucket) ? bestBuild.bucket : null;
+        let alt = null;
+        if (bucketPref) {
+          alt = (buildCandidates || []).find(c => c.hasCapacity && c.bucket === bucketPref && c.produces && c.produces.some(p => urgentResources.includes(p)));
+        }
+        if (!alt) {
+          alt = (buildCandidates || []).find(c => c.hasCapacity && c.produces && c.produces.some(p => urgentResources.includes(p)));
+        }
         if (alt) chosenBuild = alt;
       }
     } catch (e) {
