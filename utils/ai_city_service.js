@@ -5,6 +5,8 @@
  */
 
 const pool = require('../db');
+const gameUtils = require('./gameUtils');
+const { BUILDING_COSTS } = require('../constants/buildings');
 
 async function listCities(clientOrPool, forUpdate = false) {
     const q = forUpdate ? 'SELECT * FROM ai_cities FOR UPDATE' : 'SELECT * FROM ai_cities';
@@ -175,11 +177,373 @@ async function updateCityById(clientOrPool, id, changes) {
     return res.rows.length ? res.rows[0] : null;
 }
 
+
+/**
+ * Decide the best build candidate for a city given planner output and trade actions.
+ * This centralizes selection heuristics so the engine can call it from multiple places.
+ *
+ * Parameters:
+ *  - pool: pg pool or client
+ *  - perception: snapshot from perceiveSnapshot (entityId, inventory, priceBaseMap, neighbors...)
+ *  - buildPlannerResult: { candidates, rejectedDueToPopCount, houseCandidate }
+ *  - tradeActions: planner-generated trade actions (optional)
+ *  - opts: { safetyStock, findProducerChain (fn), missingResources: [], maxDepth }
+ *
+ * Returns: { bestBuild, bestTrade, rejectedDueToPopCount, houseCandidate }
+ */
+async function chooseBestBuild(pool, perception, buildPlannerResult, tradeActions, opts = {}) {
+    opts = Object.assign({ safetyStock: 200, maxDepth: 4 }, opts || {});
+    const entityId = perception && perception.entityId;
+    const buildCandidates = (buildPlannerResult && buildPlannerResult.candidates) || [];
+    const rejectedDueToPopCount = (buildPlannerResult && buildPlannerResult.rejectedDueToPopCount) || 0;
+    const houseCandidate = (buildPlannerResult && buildPlannerResult.houseCandidate) || null;
+
+    const topSlice = buildCandidates.slice(0, 10);
+
+    // bestTrade candidate (first trade action) if any
+    const bestTrade = (tradeActions && tradeActions.length > 0) ? tradeActions[0] : null;
+
+    // 1) memory-driven prioritization (missingResources passed by caller)
+    const missing = Array.isArray(opts.missingResources) ? opts.missingResources.map(m => m && m.toString().toLowerCase()) : [];
+    if (missing && missing.length > 0) {
+        const prodMatch = topSlice.find(c => c.produces && c.produces.some(p => missing.includes(p)));
+        if (prodMatch) return { bestBuild: prodMatch, bestTrade, rejectedDueToPopCount, houseCandidate };
+    }
+
+    // 2) Compute deficits grouped by bucket (poor, burgess, patrician)
+    try {
+        const SAFETY = opts.safetyStock;
+        const gameUtils = require('./gameUtils');
+        const populationService = require('./populationService');
+        const { getBuildings } = require('./buildingsService');
+
+        const bRows = await getBuildings(entityId);
+        // sum current population across buckets
+        let totalPop = 0;
+        try {
+            const popRows = await populationService.getPopulationRowsWithClient(pool, entityId);
+            for (const k of Object.keys(popRows || {})) totalPop += Number(popRows[k].current || 0);
+        } catch (e) { totalPop = 0; }
+
+        const prodPerTick = gameUtils.calculateProduction(bRows, { current_population: totalPop }) || {};
+
+        const categoryMap = gameUtils.RESOURCE_CATEGORIES || {};
+        function resourceBucketForResource(r) {
+            const cat = categoryMap[r] || null;
+            if (cat === 'common') return 'poor';
+            if (cat === 'processed') return 'burgess';
+            if (cat === 'specialized') return 'patrician';
+            return null;
+        }
+
+        // gather deficits
+        const deficits = { poor: new Set(), burgess: new Set(), patrician: new Set() };
+        const keys = new Set([...(Object.keys(prodPerTick || {})), ...(Object.keys(perception.inventory || {}))]);
+        for (const res of keys) {
+            if (!res || res === 'gold') continue;
+            const cur = Number(perception.inventory[res] || 0);
+            const net = Number(prodPerTick[res] || 0);
+            if (net < 0 || cur < SAFETY) {
+                const bk = resourceBucketForResource(res);
+                if (bk) deficits[bk].add(res);
+            }
+        }
+
+        // Hybrid poor-first policy
+        const poorDeficit = deficits.poor || new Set();
+        if (poorDeficit.size > 0) {
+            // If we are population-blocked and have a house candidate, try that first
+            if (rejectedDueToPopCount > 0 && houseCandidate) return { bestBuild: houseCandidate, bestTrade, rejectedDueToPopCount, houseCandidate };
+
+                // Otherwise attempt to find a producer chain for any poor resource.
+                // Prefer an externally provided finder (opts.findProducerChain) but fall back
+                // to the local `findProducerChain` implementation exported by this module.
+                const chainFinder = (typeof opts.findProducerChain === 'function') ? opts.findProducerChain : findProducerChain;
+                if (typeof chainFinder === 'function') {
+                    for (const r of poorDeficit) {
+                        try {
+                            const chain = await chainFinder(r, { currentResources: perception.inventory || {}, runtimeBuildings: {}, calc: {}, maxDepth: opts.maxDepth || 4 });
+                            if (Array.isArray(chain) && chain.length > 0) {
+                                // pick the first element of chain if it's present in candidates
+                                const first = chain[0];
+                                const match = buildCandidates.find(c => c.buildingId === first || (c.buildingId && c.buildingId.toString().toLowerCase() === first.toString().toLowerCase()));
+                                if (match) return { bestBuild: match, bestTrade, rejectedDueToPopCount, houseCandidate };
+                            }
+                        } catch (e) { /* ignore per-resource chain failures */ }
+                    }
+                }
+        }
+
+        // bucket-order pick
+        const bucketOrder = ['poor', 'burgess', 'patrician'];
+        for (const bk of bucketOrder) {
+            if ((deficits[bk] || new Set()).size === 0) continue;
+            const match = buildCandidates.find(c => c.produces && c.produces.some(p => deficits[bk].has(p)));
+            if (match) return { bestBuild: match, bestTrade, rejectedDueToPopCount, houseCandidate };
+        }
+    } catch (e) {
+        // if something fails, fall through to fallback picks
+    }
+
+    // Fallbacks: base preference or top candidate
+    const BASE_PREF = ['sawmill', 'quarry', 'farm'];
+    const basePick = topSlice.find(c => BASE_PREF.includes(c.buildingId));
+    if (basePick) return { bestBuild: basePick, bestTrade, rejectedDueToPopCount, houseCandidate };
+    if (buildCandidates && buildCandidates.length > 0) return { bestBuild: buildCandidates[0], bestTrade, rejectedDueToPopCount, houseCandidate };
+
+    return { bestBuild: null, bestTrade, rejectedDueToPopCount, houseCandidate };
+}
+
+// Calculate upgrade requirements using BUILDING_COSTS (same formula as v1)
+function calculateUpgradeRequirementsFromConstants(buildingType, currentLevel) {
+    const costBase = BUILDING_COSTS[buildingType];
+    if (!costBase) return null;
+    const factor = 1.7;
+    const nextLevel = currentLevel + 1;
+    // Build requiredCost dynamically from costBase to include non-standard resource keys
+    const requiredCost = {};
+    for (const [k, v] of Object.entries(costBase || {})) {
+        if (k === 'popNeeded' || k === 'popneeded' || k === 'pop') continue;
+        const baseVal = Number(v || 0);
+        requiredCost[k.toString().toLowerCase()] = Math.ceil(baseVal * Math.pow(nextLevel, factor));
+    }
+    const popNeeded = typeof costBase.popNeeded === 'number' ? costBase.popNeeded : (buildingType === 'house' ? 0 : 1);
+    return {
+        nextLevel,
+        requiredCost,
+        requiredTimeS: 0,
+        popForNextLevel: popNeeded,
+        currentPopRequirement: 0
+    };
+}
+
+/**
+ * Busca recursivamente una cadena de edificios que permitan obtener `resourceName`.
+ * Devuelve un array con el orden de construcción sugerido (primer elemento a construir primero).
+ * options:
+ *  - currentResources: mapa actual de inventario
+ *  - runtimeBuildings: niveles actuales por edificio (map)
+ *  - calc: resultado de populationService.calculateAvailablePopulation(entityId) (usa .available)
+ *  - maxDepth: profundidad máxima (default 4)
+ */
+function findProducerChain(resourceName, options = {}) {
+    if (!resourceName) return null;
+    const key = resourceName.toString().toLowerCase();
+    const prodRates = gameUtils.PRODUCTION_RATES || {};
+    const recipes = gameUtils.PROCESSING_RECIPES || {};
+    const BUILDING_COSTS_LOCAL = BUILDING_COSTS || {};
+
+    const currentResources = options.currentResources || {};
+    const runtimeBuildings = options.runtimeBuildings || {};
+    const calc = options.calc || {};
+    const maxDepthWanted = typeof options.maxDepth === 'number' ? options.maxDepth : 6; // allow deeper searches by default
+    const MAX_HARD_CAP = 10; // absolute hard cap to avoid runaway
+    const maxAttemptDepth = Math.min(MAX_HARD_CAP, Math.max(1, Math.floor(maxDepthWanted)));
+
+    // inner recursive search with explicit remaining depth and local visited set
+    function innerSearch(resourceKey, remainingDepth, visited) {
+        if (!resourceKey) return null;
+        const rk = resourceKey.toString().toLowerCase();
+        if (remainingDepth <= 0) return null;
+        if (visited.has(rk)) return null;
+        visited.add(rk);
+
+        // build direct candidate list
+        const directCandidates = [];
+        for (const [building, rates] of Object.entries(prodRates)) {
+            if (rates && Object.prototype.hasOwnProperty.call(rates, rk) && Number(rates[rk]) > 0) directCandidates.push(building);
+        }
+        if (directCandidates.length === 0) {
+            for (const [building, rates] of Object.entries(prodRates)) {
+                if (!rates) continue;
+                for (const produced of Object.keys(rates)) {
+                    const p = produced.toString().toLowerCase();
+                    if (p.includes(rk) || rk.includes(p)) {
+                        if (!directCandidates.includes(building)) directCandidates.push(building);
+                    }
+                }
+                if (building.toString().toLowerCase().includes(rk) && !directCandidates.includes(building)) directCandidates.push(building);
+            }
+        }
+
+        // Try each candidate: either it's directly buildable or we need to resolve its missing inputs
+        for (const candidate of directCandidates) {
+            try {
+                const curLevel = runtimeBuildings[candidate] || 0;
+                const reqs = calculateUpgradeRequirementsFromConstants(candidate, curLevel);
+                if (!reqs) continue;
+                const prodPopNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
+                if ((calc.available || 0) < prodPopNeeded) continue;
+
+                const missing = [];
+                for (const r in reqs.requiredCost) {
+                    const needAmt = reqs.requiredCost[r] || 0;
+                    const haveAmt = Number(currentResources[r] || 0);
+                    if (haveAmt < needAmt) missing.push(r);
+                }
+                if (missing.length === 0) return [candidate];
+
+                // recursively resolve missing inputs
+                for (const m of missing) {
+                    const sub = innerSearch(m, remainingDepth - 1, new Set(visited));
+                    if (Array.isArray(sub) && sub.length > 0) return sub.concat([candidate]);
+                }
+            } catch (e) {
+                console.warn('[AI v2] innerSearch candidate error for', candidate, e && e.message);
+                continue;
+            }
+        }
+
+        // Try recipes: if resource is a processed product, attempt to resolve its inputs recursively
+        if (recipes && recipes[rk]) {
+            const inputs = Object.keys(recipes[rk] || {});
+            for (const inRes of inputs) {
+                const sub = innerSearch(inRes, remainingDepth - 1, new Set(visited));
+                if (Array.isArray(sub) && sub.length > 0) {
+                    for (const [b, rates] of Object.entries(prodRates)) {
+                        if (rates && Number(rates[rk]) > 0) return sub.concat([b]);
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Iterative deepening: increase depth until we find a chain or hit cap
+    for (let depth = 1; depth <= maxAttemptDepth; depth++) {
+        try {
+            const result = innerSearch(key, depth, new Set());
+            if (Array.isArray(result) && result.length > 0) return result;
+        } catch (e) {
+            console.warn('[AI v2] findProducerChain innerSearch failed at depth', depth, e && e.message);
+        }
+    }
+
+    return null;
+}
+
+// Map a building type to population bucket
+function mapBuildingToPopulationBucket(buildingType) {
+    if (!buildingType) return 'poor';
+    const key = buildingType.toString().toLowerCase();
+    const prodRates = gameUtils.PRODUCTION_RATES || {};
+    const resourceCategories = gameUtils.RESOURCE_CATEGORIES || {};
+    const rates = prodRates[key] || {};
+    for (const res of Object.keys(rates)) {
+        const cat = resourceCategories[res];
+        if (!cat) continue;
+        if (cat === 'common') return 'poor';
+        if (cat === 'processed') return 'burgess';
+        if (cat === 'specialized') return 'patrician';
+        if (cat === 'strategic') return 'patrician';
+    }
+    if (key.includes('farm') || key.includes('well') || key.includes('sawmill') || key.includes('quarry')) return 'poor';
+    if (key.includes('carpinter') || key.includes('fabrica') || key.includes('alfareria') || key.includes('tintoreria')) return 'burgess';
+    return 'poor';
+}
+
+// Allow checking whether building a house is allowed for a bucket (centralized)
+async function isHouseBuildAllowed(poolRef, entityId, buildingIdLocal) {
+    if (!buildingIdLocal) return true;
+    const lower = buildingIdLocal.toString().toLowerCase();
+    let bucketToCheck = null;
+    if (lower === 'house' || lower === 'house' || lower === 'casa') bucketToCheck = 'poor';
+    else if (lower === 'casa_de_piedra' || lower.includes('piedra')) bucketToCheck = 'burgess';
+    else if (lower === 'casa_de_ladrillos' || lower.includes('ladrill')) bucketToCheck = 'patrician';
+    if (!bucketToCheck) return true;
+    try {
+        const populationServiceLocal = require('./populationService');
+        const client = await (poolRef.connect ? poolRef.connect() : pool.connect());
+        try {
+            const row = await populationServiceLocal.getPopulationByTypeWithClient(client, entityId, bucketToCheck);
+            const cur = Number(row.current || 0);
+            const maxv = Number(row.max || 0);
+            if (cur !== maxv) return false;
+
+            // compute production for commons and require total > 0
+            try {
+                const { getBuildings } = require('./buildingsService');
+                const gameUtilsLocal = require('./gameUtils');
+                const bRows = await getBuildings(entityId);
+                let totalPop = 0;
+                try {
+                    const popRows = await populationServiceLocal.getPopulationRowsWithClient(client, entityId);
+                    for (const k of Object.keys(popRows || {})) totalPop += Number(popRows[k].current || 0);
+                } catch (e) { totalPop = 0; }
+                const prodPerTick = gameUtilsLocal.calculateProduction(bRows, { current_population: totalPop }) || {};
+                const cats = gameUtilsLocal.RESOURCE_CATEGORIES || {};
+                let totalCommonNet = 0;
+                for (const r of Object.keys(cats)) {
+                    if (cats[r] === 'common') totalCommonNet += Number(prodPerTick[r] || 0);
+                }
+                return totalCommonNet > 0;
+            } catch (e) {
+                return false;
+            }
+        } finally {
+            try { client.release(); } catch (e) { /* ignore */ }
+        }
+    } catch (e) {
+        return false;
+    }
+}
+
+// Compute a summary of common resource deficits for logging/decisions
+async function computeCommonDeficitSummary(poolRef, entityId, opts = {}) {
+    const SAFETY = (opts && opts.safetyStock) || 200;
+    try {
+        const { getBuildings } = require('./buildingsService');
+        const populationServiceLocal = require('./populationService');
+        const bRows = await getBuildings(entityId);
+        let totalPop = 0;
+        try {
+            const popRows = await populationServiceLocal.getPopulationRowsWithClient(poolRef, entityId);
+            for (const k of Object.keys(popRows || {})) totalPop += Number(popRows[k].current || 0);
+        } catch (e) { totalPop = 0; }
+        const prodPerTick = gameUtils.calculateProduction(bRows, { current_population: totalPop }) || {};
+        const cats = gameUtils.RESOURCE_CATEGORIES || {};
+        const commonKeys = Object.keys(cats).filter(k => cats[k] === 'common');
+        const factor = 60 / (gameUtils.TICK_SECONDS || 60);
+        const summary = {};
+        for (const res of commonKeys) {
+            const stock = 0; // caller likely has perception.inventory; keep 0 as placeholder
+            const netPerTick = Number(prodPerTick[res] || 0);
+            const perMinute = netPerTick * factor;
+            const status = (netPerTick < 0 || stock < SAFETY) ? 'deficit' : 'surplus';
+            summary[res] = { stock, netPerTick, perMinute, status, safety: SAFETY };
+        }
+        return summary;
+    } catch (e) {
+        return {};
+    }
+}
+
+// Compute effective payback threshold for a candidate given urgency and inventory
+function computeEffectiveThresholdForCandidate(candidate, perception, opts = {}) {
+    const SAFETY = (opts && opts.safetyStock) || 200;
+    const PAYBACK_THRESHOLD = (opts && opts.paybackThreshold) || 2000;
+    const OVERRIDE_PRIORITY_BOOST = (typeof (opts && opts.overridePriorityBoost) === 'number') ? opts.overridePriorityBoost : 8;
+    if (!candidate) return PAYBACK_THRESHOLD;
+    if ((candidate.priorityBoost || 0) >= OVERRIDE_PRIORITY_BOOST) return Infinity;
+    try {
+        const produces = candidate.produces || [];
+        for (const r of produces) {
+            const have = Number(perception.inventory && perception.inventory[r] || 0);
+            if (have < SAFETY) return Infinity;
+        }
+    } catch (e) { /* ignore */ }
+    return PAYBACK_THRESHOLD;
+}
+
 module.exports = {
     listCities,
     getCityById,
     createCity,
     createPairedCity,
     deleteCityById,
-    updateCityById
+    updateCityById,
+    chooseBestBuild,
+    calculateUpgradeRequirementsFromConstants,
+    findProducerChain
 };

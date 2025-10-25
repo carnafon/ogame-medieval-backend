@@ -267,133 +267,13 @@ function mapBuildingToPopulationBucket(buildingType) {
   return 'poor';
 }
 
-// Calculate upgrade requirements using BUILDING_COSTS (same formula as v1)
+// Wrapper helpers delegated to ai_city_service (centralized implementation)
 function calculateUpgradeRequirementsFromConstants(buildingType, currentLevel) {
-  const costBase = BUILDING_COSTS[buildingType];
-  if (!costBase) return null;
-  const factor = 1.7;
-  const nextLevel = currentLevel + 1;
-  // Build requiredCost dynamically from costBase to include non-standard resource keys
-  const requiredCost = {};
-  for (const [k, v] of Object.entries(costBase || {})) {
-    if (k === 'popNeeded' || k === 'popneeded' || k === 'pop') continue;
-    const baseVal = Number(v || 0);
-    requiredCost[k.toString().toLowerCase()] = Math.ceil(baseVal * Math.pow(nextLevel, factor));
-  }
-  const popNeeded = typeof costBase.popNeeded === 'number' ? costBase.popNeeded : (buildingType === 'house' ? 0 : 1);
-  return {
-    nextLevel,
-    requiredCost,
-    requiredTimeS: 0,
-    popForNextLevel: popNeeded,
-    currentPopRequirement: 0
-  };
+  return aiCityService.calculateUpgradeRequirementsFromConstants(buildingType, currentLevel);
 }
 
-/**
- * Busca recursivamente una cadena de edificios que permitan obtener `resourceName`.
- * Devuelve un array con el orden de construcción sugerido (primer elemento a construir primero).
- * options:
- *  - currentResources: mapa actual de inventario
- *  - runtimeBuildings: niveles actuales por edificio (map)
- *  - calc: resultado de populationService.calculateAvailablePopulation(entityId) (usa .available)
- *  - maxDepth: profundidad máxima (default 4)
- */
 function findProducerChain(resourceName, options = {}) {
-  if (!resourceName) return null;
-  const key = resourceName.toString().toLowerCase();
-  const prodRates = gameUtils.PRODUCTION_RATES || {};
-  const recipes = gameUtils.PROCESSING_RECIPES || {};
-  const BUILDING_COSTS_LOCAL = BUILDING_COSTS || {};
-
-  const currentResources = options.currentResources || {};
-  const runtimeBuildings = options.runtimeBuildings || {};
-  const calc = options.calc || {};
-  const maxDepthWanted = typeof options.maxDepth === 'number' ? options.maxDepth : 6; // allow deeper searches by default
-  const MAX_HARD_CAP = 10; // absolute hard cap to avoid runaway
-  const maxAttemptDepth = Math.min(MAX_HARD_CAP, Math.max(1, Math.floor(maxDepthWanted)));
-
-  // inner recursive search with explicit remaining depth and local visited set
-  function innerSearch(resourceKey, remainingDepth, visited) {
-    if (!resourceKey) return null;
-    const rk = resourceKey.toString().toLowerCase();
-    if (remainingDepth <= 0) return null;
-    if (visited.has(rk)) return null;
-    visited.add(rk);
-
-    // build direct candidate list
-    const directCandidates = [];
-    for (const [building, rates] of Object.entries(prodRates)) {
-      if (rates && Object.prototype.hasOwnProperty.call(rates, rk) && Number(rates[rk]) > 0) directCandidates.push(building);
-    }
-    if (directCandidates.length === 0) {
-      for (const [building, rates] of Object.entries(prodRates)) {
-        if (!rates) continue;
-        for (const produced of Object.keys(rates)) {
-          const p = produced.toString().toLowerCase();
-          if (p.includes(rk) || rk.includes(p)) {
-            if (!directCandidates.includes(building)) directCandidates.push(building);
-          }
-        }
-        if (building.toString().toLowerCase().includes(rk) && !directCandidates.includes(building)) directCandidates.push(building);
-      }
-    }
-
-    // Try each candidate: either it's directly buildable or we need to resolve its missing inputs
-    for (const candidate of directCandidates) {
-      try {
-        const curLevel = runtimeBuildings[candidate] || 0;
-        const reqs = calculateUpgradeRequirementsFromConstants(candidate, curLevel);
-        if (!reqs) continue;
-        const prodPopNeeded = (reqs.popForNextLevel || 0) - (reqs.currentPopRequirement || 0);
-        if ((calc.available || 0) < prodPopNeeded) continue;
-
-        const missing = [];
-        for (const r in reqs.requiredCost) {
-          const needAmt = reqs.requiredCost[r] || 0;
-          const haveAmt = Number(currentResources[r] || 0);
-          if (haveAmt < needAmt) missing.push(r);
-        }
-        if (missing.length === 0) return [candidate];
-
-        // recursively resolve missing inputs
-        for (const m of missing) {
-          const sub = innerSearch(m, remainingDepth - 1, new Set(visited));
-          if (Array.isArray(sub) && sub.length > 0) return sub.concat([candidate]);
-        }
-      } catch (e) {
-        console.warn('[AI v2] innerSearch candidate error for', candidate, e && e.message);
-        continue;
-      }
-    }
-
-    // Try recipes: if resource is a processed product, attempt to resolve its inputs recursively
-    if (recipes && recipes[rk]) {
-      const inputs = Object.keys(recipes[rk] || {});
-      for (const inRes of inputs) {
-        const sub = innerSearch(inRes, remainingDepth - 1, new Set(visited));
-        if (Array.isArray(sub) && sub.length > 0) {
-          for (const [b, rates] of Object.entries(prodRates)) {
-            if (rates && Number(rates[rk]) > 0) return sub.concat([b]);
-          }
-        }
-      }
-    }
-
-    return null;
-  }
-
-  // Iterative deepening: increase depth until we find a chain or hit cap
-  for (let depth = 1; depth <= maxAttemptDepth; depth++) {
-    try {
-      const result = innerSearch(key, depth, new Set());
-      if (Array.isArray(result) && result.length > 0) return result;
-    } catch (e) {
-      console.warn('[AI v2] findProducerChain innerSearch failed at depth', depth, e && e.message);
-    }
-  }
-
-  return null;
+  return aiCityService.findProducerChain(resourceName, options);
 }
 
 // Build planner: rank building upgrades by payback time (cost in gold / marginal value per tick)
@@ -924,158 +804,21 @@ async function runCityTick(poolOrClient, cityId, options = {}) {
     }
   }
 
-  // Decision: choose the top candidate between best build (low payback) and best trade (high score)
-  // We'll prioritize builds that address deficits for population maintenance per-bucket: poor(common) -> burgess(processed) -> patrician(specialized)
-  const BASE_PREF = ['sawmill', 'quarry', 'farm'];
+  // Delegate build/trade selection to ai_city_service to centralize heuristics
   let bestBuild = null;
-  if (buildCandidates && buildCandidates.length > 0) {
-    // try to find a base pref candidate among top few
-    const topSlice = buildCandidates.slice(0, 10);
-
-    // 1) Prioritize AI memory-missing resources first (as before)
+  let bestTrade = null;
+  try {
     const missing = Array.from(getMissingResourcesFromMemory(cityId));
-    if (missing && missing.length > 0) {
-      const prodMatch = topSlice.find(c => c.produces && c.produces.some(p => missing.includes(p)));
-      if (prodMatch) { bestBuild = prodMatch; }
-    }
-
-    // 2) Compute deficits grouped by population bucket using production net and current inventory
-    if (!bestBuild) {
-      try {
-        const SAFETY = opts.safetyStock || DEFAULTS.SAFETY_STOCK;
-        // load buildings and population snapshot to estimate production
-        const bRows = await getBuildings(perception.entityId);
-        // sum current population across buckets
-        let totalPop = 0;
-        try {
-          const popRows = await populationService.getPopulationRowsWithClient(pool, cityId);
-          for (const k of Object.keys(popRows || {})) totalPop += Number(popRows[k].current || 0);
-        } catch (e) { totalPop = 0; }
-        const prodPerTick = gameUtils.calculateProduction(bRows, { current_population: totalPop }) || {};
-
-        // bucket mapping helper
-        const categoryMap = gameUtils.RESOURCE_CATEGORIES || {};
-        function resourceBucketForResource(r) {
-          const cat = categoryMap[r] || null;
-          if (cat === 'common') return 'poor';
-          if (cat === 'processed') return 'burgess';
-          if (cat === 'specialized') return 'patrician';
-          return null;
-        }
-
-        // gather deficits per bucket
-  const deficits = { poor: new Set(), burgess: new Set(), patrician: new Set() };
-  // helper to iterate object keys when perception.inventory may be sparse
-  function rowsOrKeys(obj) { try { return Object.keys(obj || {}); } catch (e) { return []; } }
-  const keys = new Set([...rowsOrKeys(perception.inventory || {}), ...Object.keys(prodPerTick || {})]);
-        for (const res of keys) {
-          if (!res || res === 'gold') continue;
-          const cur = Number(perception.inventory[res] || 0);
-          const net = Number(prodPerTick[res] || 0);
-          if (net < 0 || cur < SAFETY) {
-            const bucket = resourceBucketForResource(res);
-            if (bucket) deficits[bucket].add(res);
-          }
-        }
-
-        // If there are deficits in 'poor' resources, apply hybrid policy:
-        // 1) If rejectedDueToPopCount > 0 and there is a houseCandidate -> attempt house first
-        // 2) Otherwise, attempt to find a producer chain for the poor resources and try to build the first element
-        const poorDeficit = (deficits.poor || new Set());
-        if (poorDeficit.size > 0) {
-          try {
-            const rejectedN = (buildPlannerResult && buildPlannerResult.rejectedDueToPopCount) || 0;
-            const houseCand = (buildPlannerResult && buildPlannerResult.houseCandidate) || null;
-            if (rejectedN > 0 && houseCand) {
-              // log common resource deficit summary before attempting to build house
-              const commonSummaryBeforeHouse = await computeCommonDeficitSummary();
-              logEvent({ type: 'build_attempt_house_due_to_poor_deficit', entityId, reason: 'poor_deficit_and_no_pop_slots', poorDeficit: Array.from(poorDeficit), rejectedN, house: houseCand.buildingId, commonSummary: commonSummaryBeforeHouse });
-              try {
-                const hres = await executeBuildAction(pool, houseCand, perception, {});
-                execResults.push({ action: { type: 'build', building: houseCand.buildingId }, result: hres });
-                if (hres && hres.success) {
-                  return { success: true, cityId, acted: true, results: execResults };
-                }
-              } catch (e) {
-                logEvent({ type: 'build_attempt_house_failed', entityId, err: e && e.message });
-              }
-            }
-
-            // If we didn't build a house, try to resolve poor deficits via producer chains
-            // Build runtime map and population calc snapshot
-            const bRowsForChain = await getBuildings(perception.entityId);
-            const runtimeBuildingsForChain = {};
-            bRowsForChain.forEach(b => { runtimeBuildingsForChain[b.type] = b.level || 0; });
-            let calc = {};
-            try { calc = await populationService.calculateAvailablePopulation(perception.entityId); } catch (e) { calc = {}; }
-
-            for (const res of Array.from(poorDeficit)) {
-              try {
-                const chain = findProducerChain(res, { currentResources: perception.inventory || {}, runtimeBuildings: runtimeBuildingsForChain, calc, maxDepth: opts.maxDepth || 4 });
-                if (Array.isArray(chain) && chain.length > 0) {
-                  const first = chain[0];
-                  logEvent({ type: 'build_producer_chain_found_poor', entityId, missing: res, chain });
-                  // try to locate a matching candidate from planner results
-                  let alt = (buildCandidates || []).find(c => c.buildingId === first && c.hasCapacity);
-                  if (!alt) {
-                    const curLevel = runtimeBuildingsForChain[first] || 0;
-                    const prodReqs = calculateUpgradeRequirementsFromConstants(first, curLevel);
-                    if (prodReqs) {
-                      // basic population availability check
-                      const bucket = mapBuildingToPopulationBucket(first);
-                      let perTypeRow = null;
-                      try {
-                        const tmpClient = await pool.connect();
-                        try {
-                          perTypeRow = await populationService.getPopulationByTypeWithClient(tmpClient, perception.entityId, bucket);
-                        } finally { tmpClient.release(); }
-                      } catch (e) { perTypeRow = null; }
-                      const perTypeAvailable = perTypeRow ? Number(perTypeRow.available || Math.max(0, Number(perTypeRow.max || 0) - Number(perTypeRow.current || 0))) : Infinity;
-                      const popNeeded = (prodReqs.popForNextLevel || 0) - (prodReqs.currentPopRequirement || 0);
-                      const hasCapacity = (perTypeAvailable === Infinity) ? true : (perTypeAvailable >= popNeeded);
-                      alt = { buildingId: first, reqs: prodReqs, hasCapacity, produces: Object.keys((gameUtils.PRODUCTION_RATES || {})[first] || {}) };
-                    }
-                  }
-                  if (alt) {
-                    // log common resource deficit summary before attempting alternative producer build
-                    const commonSummaryBeforeAlt = await computeCommonDeficitSummary();
-                    logEvent({ type: 'build_try_alternative_chain_poor', entityId: cityId, alternative: alt.buildingId, missing: res, chain, commonSummary: commonSummaryBeforeAlt });
-                    const ares = await executeBuildAction(pool, alt, perception, {});
-                    execResults.push({ action: { type: 'build', building: alt.buildingId }, result: ares });
-                    if (ares && ares.success) return { success: true, cityId, acted: true, results: execResults };
-                  }
-                }
-              } catch (chainErr) {
-                logEvent({ type: 'build_producer_chain_error_poor', entityId, missing: res, err: chainErr && chainErr.message });
-              }
-            }
-          } catch (e) {
-            // ignore and fallback to normal bucket selection
-            logEvent({ type: 'build_poor_deficit_handling_error', entityId, err: e && e.message });
-          }
-        }
-
-        // choose candidate by bucket priority
-        const bucketOrder = [ 'poor', 'burgess', 'patrician' ];
-        for (const bk of bucketOrder) {
-          if ((deficits[bk] || new Set()).size === 0) continue;
-          // find first candidate producing any resource in this bucket
-          const match = (buildCandidates || []).find(c => c.produces && c.produces.some(p => deficits[bk].has(p)));
-          if (match) { bestBuild = match; break; }
-        }
-      } catch (e) {
-        // ignore and fallback to base pref
-      }
-    }
-
-    // 3) fallback: base preference or top candidate
-    if (!bestBuild) {
-      const basePick = topSlice.find(c => BASE_PREF.includes(c.buildingId));
-      if (basePick) bestBuild = basePick;
-      else bestBuild = buildCandidates[0];
-    }
+  const choice = await aiCityService.chooseBestBuild(pool, perception, buildPlannerResult, tradeActions, { safetyStock: opts.safetyStock || DEFAULTS.SAFETY_STOCK, missingResources: missing, maxDepth: 4 });
+    bestBuild = choice && choice.bestBuild ? choice.bestBuild : null;
+    bestTrade = choice && choice.bestTrade ? choice.bestTrade : null;
+  } catch (e) {
+    console.warn('[AI v2] chooseBestBuild failed, falling back to defaults', e && e.message);
+    if (buildCandidates && buildCandidates.length > 0) bestBuild = buildCandidates[0];
+    bestTrade = (tradeActions && tradeActions.length > 0) ? tradeActions[0] : null;
   }
-  const bestTrade = (tradeActions && tradeActions.length > 0) ? tradeActions[0] : null;
+
+
 
   // Helper: check if building a house-type is allowed based on equality of current vs max for the target bucket
   async function isHouseBuildAllowed(poolRef, entityId, buildingIdLocal) {
